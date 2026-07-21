@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-
-<html class="dark" lang="en"><head>
+<html class="dark" lang="en">
+<head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>WAREHOUSE_REPLACED // AUTOMATA_CORE_V1</title>
@@ -67,18 +67,11 @@
                     "xl": "0.75rem",
                     "full": "9999px"
             },
-            "spacing": {
-                    "pixel-unit": "4px",
-                    "gutter": "16px",
-                    "panel-margin": "24px",
-                    "container-padding": "12px"
-            },
             "fontFamily": {
                     "code-sm": ["JetBrains Mono"],
                     "stat-lg": ["JetBrains Mono"],
                     "headline-lg": ["JetBrains Mono"],
                     "headline-xl": ["JetBrains Mono"],
-                    "headline-lg-mobile": ["JetBrains Mono"],
                     "label-caps": ["JetBrains Mono"],
                     "body-md": ["Hanken Grotesk"]
             },
@@ -87,7 +80,6 @@
                     "stat-lg": ["20px", {"lineHeight": "24px", "letterSpacing": "0.05em", "fontWeight": "700"}],
                     "headline-lg": ["32px", {"lineHeight": "36px", "fontWeight": "700"}],
                     "headline-xl": ["48px", {"lineHeight": "52px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
-                    "headline-lg-mobile": ["24px", {"lineHeight": "28px", "fontWeight": "700"}],
                     "label-caps": ["12px", {"lineHeight": "16px", "fontWeight": "700"}],
                     "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}]
             }
@@ -114,8 +106,8 @@
 
         .industrial-grid {
             background-image: 
-                linear-gradient(to right, rgba(157, 143, 121, 0.05) 1px, transparent 1px),
-                linear-gradient(to bottom, rgba(157, 143, 121, 0.05) 1px, transparent 1px);
+                linear-gradient(to right, rgba(157, 143, 121, 0.15) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(157, 143, 121, 0.15) 1px, transparent 1px);
             background-size: 32px 32px;
         }
 
@@ -137,15 +129,19 @@
 
         .terminal-scroll::-webkit-scrollbar {
             width: 8px;
+            height: 8px;
         }
         .terminal-scroll::-webkit-scrollbar-track {
             background: #181a2a;
         }
         .terminal-scroll::-webkit-scrollbar-thumb {
             background: #504533;
+            border-radius: 0px;
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb:hover {
+            background: #9d8f79;
         }
 
-        /* Syntax Highlighting Styles */
         .token-keyword { color: #ffd588; font-weight: 700; }
         .token-function { color: #8cf272; }
         .token-comment { color: #9d8f79; font-style: italic; }
@@ -154,6 +150,23 @@
         #code-editor-layer {
             pointer-events: none;
             white-space: pre;
+            padding: 8px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            min-width: 100%;
+        }
+
+        #code-textarea {
+            white-space: pre;
+            overflow-wrap: normal;
+            overflow-x: auto;
+            resize: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             padding: 8px;
         }
     </style>
@@ -167,15 +180,15 @@
 <div class="flex gap-6 font-code-sm text-code-sm">
 <div class="flex flex-col">
 <span class="text-on-surface-variant text-[10px] uppercase">Gold_Reserves</span>
-<span class="text-primary-container font-bold" id="ui-gold">1,250 <span class="text-[10px]">AU</span></span>
+<span class="text-primary-container font-bold" id="ui-gold">0 <span class="text-[10px]">AU</span></span>
 </div>
 <div class="flex flex-col">
 <span class="text-on-surface-variant text-[10px] uppercase">Unit_Count</span>
-<span class="text-on-surface" id="ui-units">12 / 20 <span class="text-[10px]">BOTS</span></span>
+<span class="text-on-surface" id="ui-units">0 / 20 <span class="text-[10px]">BOTS</span></span>
 </div>
 <div class="flex flex-col">
 <span class="text-on-surface-variant text-[10px] uppercase">Op_Level</span>
-<span class="text-tertiary">LVL 4</span>
+<span class="text-tertiary">LVL 0</span>
 </div>
 </div>
 </div>
@@ -183,7 +196,7 @@
 <div class="flex flex-col items-end mr-4">
 <span class="text-on-surface-variant text-[10px] uppercase">Core_Power</span>
 <div class="flex items-center gap-2">
-<span class="text-tertiary font-bold" id="ui-power">85%</span>
+<span class="text-tertiary font-bold" id="ui-power">100%</span>
 <div class="w-24 h-2 bg-surface-container-highest flex gap-[1px]">
 <div class="flex-1 bg-tertiary"></div>
 <div class="flex-1 bg-tertiary"></div>
@@ -192,7 +205,7 @@
 <div class="flex-1 bg-tertiary"></div>
 <div class="flex-1 bg-tertiary"></div>
 <div class="flex-1 bg-tertiary"></div>
-<div class="flex-1 bg-surface-variant"></div>
+<div class="flex-1 bg-tertiary"></div>
 </div>
 </div>
 </div>
@@ -209,7 +222,8 @@
 </div>
 </div>
 </header>
-<!-- MAIN GAME AREA (GRID LAYOUT) -->
+
+<!-- MAIN GAME AREA -->
 <main class="flex-1 grid grid-cols-[minmax(300px,1fr)_2fr_minmax(300px,1fr)] mt-16 pb-8 overflow-hidden bg-background">
 <!-- LEFT PANEL: LOGIC_CORE -->
 <aside class="flex flex-col p-2 bg-surface-container-low border-r-4 border-outline-variant h-full overflow-hidden">
@@ -219,137 +233,104 @@
 </div>
 <div class="flex-1 relative bg-surface-container-lowest pixel-border overflow-hidden flex font-code-sm group">
 <div class="scanline"></div>
-<!-- Line Numbers -->
-<div class="w-8 bg-surface-container text-outline-variant text-right pr-2 pt-2 select-none border-r border-outline-variant leading-5">
-                1<br/>2<br/>3<br/>4<br/>5<br/>6<br/>7<br/>8<br/>9<br/>10<br/>11
+<!-- Dynamic Line Numbers Column -->
+<div class="w-10 bg-surface-container text-outline-variant text-right pr-2 pt-2 select-none border-r border-outline-variant leading-5 overflow-hidden terminal-scroll" id="code-line-numbers">
+                1
             </div>
-<!-- Code Editor Container -->
-<div class="relative flex-1 overflow-hidden">
-<!-- Highlight Layer -->
-<div class="absolute inset-0 text-transparent leading-5" id="code-editor-layer"></div>
-<!-- Input Layer -->
-<textarea class="absolute inset-0 w-full h-full bg-transparent border-none focus:ring-0 text-on-surface p-2 resize-none terminal-scroll font-code-sm leading-5 caret-tertiary" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
-while(true) {
-  find(PACKAGE);
-  move(NEAREST_DOCK);
-  if(PACKAGE.weight &gt; 50) {
-    call(HEAVY_LIFT_BOT);
-  }
-  deliver();
-  charge(10);
-}</textarea>
+<div class="relative flex-1 overflow-auto terminal-scroll" id="code-scroll-container">
+<div class="absolute inset-0 text-transparent leading-5 pointer-events-none" id="code-editor-layer"></div>
+<textarea class="bg-transparent border-none focus:ring-0 text-on-surface resize-none font-code-sm leading-5 caret-tertiary" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
+move();
+move();
+turnRight();
+move();
+pickup();
+dropoff();</textarea>
 </div>
 </div>
-<!-- REPLACE THIS SPECIFIC BUTTON BLOCK: -->
-    <button 
-        onclick="window.botController.parseAndExecute(document.getElementById('code-textarea').value)"
-        class="mt-4 bg-primary-container text-on-primary-container font-code-sm text-code-sm py-3 pixel-border hover:brightness-110 active:shadow-[inset_2px_2px_0px_#000] transition-all flex items-center justify-center gap-2 group">
-        <span class="material-symbols-outlined group-hover:rotate-12 transition-transform">play_arrow</span>
+<button id="run-script-btn" onclick="window.botController.parseAndExecute(document.getElementById('code-textarea').value)" class="mt-4 bg-primary-container text-on-primary-container font-code-sm text-code-sm py-3 pixel-border hover:brightness-110 active:shadow-[inset_2px_2px_0px_#000] transition-all flex items-center justify-center gap-2 group">
+<span class="material-symbols-outlined group-hover:rotate-12 transition-transform">play_arrow</span>
         RUN SCRIPT
     </button>
 </aside>
-<!-- CENTER PANEL: VIEWPORT (GRID-LOCKED) -->
+
+<!-- CENTER PANEL: VIEWPORT -->
 <section class="relative industrial-grid flex items-center justify-center overflow-auto p-4">
-<!-- Viewport container locked to multiples of 32px -->
-<div class="max-w-[1024px] max-h-[1024px] aspect-square w-full h-full pixel-border bg-surface-container-lowest relative flex items-center justify-center overflow-hidden" id="VIEWPORT_ACTIVE">
-<div class="absolute top-4 left-4 flex gap-2 z-10">
-<div class="px-2 py-1 bg-surface-container text-[10px] text-tertiary font-bold border border-tertiary/30 uppercase">Camera_Active</div>
+<div class="w-[512px] h-[512px] min-w-[512px] min-h-[512px] pixel-border bg-surface-container-lowest relative overflow-hidden" id="VIEWPORT_ACTIVE">
+<div class="absolute top-4 left-4 flex gap-2 z-20">
+<div class="px-2 py-1 bg-surface-container text-[10px] text-tertiary font-bold border border-tertiary/30 uppercase">Grid_32x32_Active</div>
 <div class="px-2 py-1 bg-surface-container text-[10px] text-on-surface-variant border border-outline-variant uppercase">Node_01_Main</div>
 </div>
-<!-- Grid helper overlay (32px cells) -->
-<div class="absolute inset-0 opacity-20 pointer-events-none" style="background-image: linear-gradient(to right, #9d8f79 1px, transparent 1px), linear-gradient(to bottom, #9d8f79 1px, transparent 1px); background-size: 32px 32px;"></div>
-<div class="text-center opacity-20 flex flex-col items-center">
-<span class="material-symbols-outlined text-9xl">precision_manufacturing</span>
-<h2 class="font-headline-xl text-headline-xl uppercase tracking-widest mt-4">VIEWPORT_ACTIVE</h2>
-</div>
+<div class="absolute inset-0 industrial-grid opacity-40 pointer-events-none z-10"></div>
 </div>
 </section>
+
 <!-- RIGHT PANEL: INFO PANEL -->
 <aside class="flex flex-col p-2 bg-surface-container-low border-l-4 border-outline-variant h-full overflow-hidden">
-<!-- Tab Headers -->
 <div class="flex gap-1 mb-2">
 <button class="flex-1 py-2 font-code-sm text-code-sm bg-primary text-on-primary pixel-border-pressed font-bold" id="tab-stats" onclick="switchTab('stats')">STATS</button>
 <button class="flex-1 py-2 font-code-sm text-code-sm bg-surface-container text-on-surface-variant pixel-border hover:bg-surface-container-high" id="tab-ship" onclick="switchTab('ship')">SHIP</button>
 <button class="flex-1 py-2 font-code-sm text-code-sm bg-surface-container text-on-surface-variant pixel-border hover:bg-surface-container-high" id="tab-up" onclick="switchTab('up')">UPGR</button>
 </div>
 <div class="flex-1 flex flex-col gap-4 overflow-y-auto terminal-scroll pr-1">
-<!-- Tab Content: Stats -->
 <div class="flex flex-col gap-4" id="content-stats">
 <div class="p-3 bg-surface-container-high pixel-border">
 <span class="text-label-caps text-on-surface-variant block mb-2">THROUGHPUT_EFFICIENCY</span>
-<div class="text-2xl font-stat-lg text-tertiary" id="ui-throughput">94.2%</div>
+<div class="text-2xl font-stat-lg text-tertiary" id="ui-throughput">0.0%</div>
 <div class="w-full h-1 bg-surface-container-lowest mt-2 overflow-hidden">
-<div class="h-full bg-tertiary transition-all duration-500" id="ui-throughput-bar" style="width: 94.2%"></div>
+<div class="h-full bg-tertiary transition-all duration-500" id="ui-throughput-bar" style="width: 0.0%"></div>
 </div>
 </div>
 <div class="p-3 bg-surface-container-high pixel-border">
 <span class="text-label-caps text-on-surface-variant block mb-2">ACTIVE_UNITS</span>
 <div class="space-y-3">
-<div class="flex justify-between items-center">
-<span class="font-code-sm text-xs">MK-1_ROLLER</span>
-<span class="font-code-sm text-xs text-primary">8 / 10</span>
-</div>
-<div class="flex justify-between items-center">
-<span class="font-code-sm text-xs">MK-2_FLYER</span>
-<span class="font-code-sm text-xs text-primary">4 / 10</span>
-</div>
+<div class="flex justify-between items-center"><span class="font-code-sm text-xs">MK-1_ROLLER</span><span class="font-code-sm text-xs text-primary">1 / 1</span></div>
 </div>
 </div>
 <div class="grid grid-cols-2 gap-2">
 <div class="pixel-border bg-surface-container p-2">
 <div class="text-[10px] text-on-surface-variant uppercase">Uptime</div>
-<div class="text-sm font-bold text-on-surface">14h 22m</div>
+<div class="text-sm font-bold text-on-surface">0h 00m</div>
 </div>
 <div class="pixel-border bg-surface-container p-2">
 <div class="text-[10px] text-on-surface-variant uppercase">Errors</div>
-<div class="text-sm font-bold text-secondary-container" id="ui-errors">0.02%</div>
+<div class="text-sm font-bold text-secondary-container" id="ui-errors">0.00%</div>
 </div>
 </div>
 </div>
-<!-- Tab Content: Shipments -->
 <div class="hidden flex flex-col gap-2" id="content-ship">
 <div class="pixel-border bg-surface-container-highest p-2 flex gap-3 items-center">
-<div class="w-10 h-10 bg-primary-container flex items-center justify-center">
-<span class="material-symbols-outlined text-on-primary-container">box</span>
-</div>
-<div class="flex-1">
-<div class="text-xs font-bold text-on-surface uppercase">Order #8821</div>
-<div class="text-[10px] text-on-surface-variant">Electronics x14</div>
-</div>
+<div class="w-10 h-10 bg-primary-container flex items-center justify-center"><span class="material-symbols-outlined text-on-primary-container">box</span></div>
+<div class="flex-1"><div class="text-xs font-bold text-on-surface uppercase">Order #8821</div><div class="text-[10px] text-on-surface-variant">Electronics x14</div></div>
 <div class="text-tertiary text-xs font-bold">READY</div>
 </div>
 </div>
-<!-- Tab Content: Upgrades -->
 <div class="hidden flex flex-col gap-2" id="content-up">
 <div class="p-3 pixel-border bg-surface-container-high border-l-primary border-l-8">
-<div class="flex justify-between items-start mb-2">
-<div class="text-sm font-bold text-primary">FASTER_CPU</div>
-<div class="text-xs bg-primary-container px-1 text-on-primary-container">450 AU</div>
-</div>
+<div class="flex justify-between items-start mb-2"><div class="text-sm font-bold text-primary">FASTER_CPU</div><div class="text-xs bg-primary-container px-1 text-on-primary-container">450 AU</div></div>
 <p class="text-[10px] text-on-surface-variant mb-3 leading-tight">Increases script execution speed by 15%.</p>
 <button class="w-full py-1 bg-primary text-on-primary text-[10px] font-bold pixel-border uppercase">Apply Upgrade</button>
 </div>
 </div>
-<!-- NAV_MAP (Migrated from center) -->
 <div class="pixel-border bg-surface-container-high overflow-hidden min-h-[160px] relative mt-2">
 <div class="absolute inset-0 industrial-grid opacity-30"></div>
 <div class="absolute top-1/2 left-1/2 w-2 h-2 bg-primary animate-pulse rounded-full -translate-x-1/2 -translate-y-1/2"></div>
 <div class="w-full bg-outline-variant text-[8px] text-on-surface px-1 uppercase font-bold relative z-10">NAV_MAP // NODE_LOCATOR</div>
 </div>
-<!-- REAL_TIME_FLOW Graph -->
 <div class="mt-auto h-32 pixel-border bg-surface-container-lowest relative overflow-hidden flex items-end">
 <div class="absolute inset-0 flex items-end" id="flow-graph-container">
-<div class="flex-1 h-[40%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
-<div class="flex-1 h-[60%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
-<div class="flex-1 h-[30%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
-<div class="flex-1 h-[80%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
-<div class="flex-1 h-[50%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
+<div class="flex-1 h-[0%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
+<div class="flex-1 h-[0%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
+<div class="flex-1 h-[0%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
+<div class="flex-1 h-[0%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
+<div class="flex-1 h-[0%] bg-tertiary/20 border-t border-tertiary transition-all duration-500"></div>
 </div>
 <div class="absolute inset-0 p-2 text-[10px] text-tertiary font-code-sm pointer-events-none">REAL_TIME_FLOW</div>
 </div>
 </div>
 </aside>
 </main>
+
 <!-- FOOTER -->
 <footer class="w-full h-8 fixed bottom-0 z-50 bg-surface-container-lowest border-t-2 border-outline-variant flex justify-between items-center px-4">
 <span class="font-label-caps text-label-caps text-on-surface-variant">© 2144 INDUSTRIAL_KINETICS_CORP</span>
@@ -363,34 +344,8 @@ while(true) {
 <div class="w-2 h-2 bg-tertiary rounded-full animate-pulse shadow-[0_0_5px_#8cf272]"></div>
 </div>
 </footer>
-<!-- BOT LOGIC INTEGRATION -->
-<script src="bot-controller.js"></script>
-
-<!-- 2. Initialize the controller BEFORE the UI logic -->
-<script>
-    // Add commandDelayMs to slow it down (e.g., 500ms = half a second per command)
-    window.botController = new BotController({ commandDelayMs: 500 });
-    window.initBotVisualizer(window.botController, 'VIEWPORT_ACTIVE');
-</script>
 
 <script>
-    // This function runs roughly 60 times a second
-    function gameLoop() {
-        if (window.botController) {
-            window.botController.update();
-        }
-        requestAnimationFrame(gameLoop);
-    }
-    
-    // Start the engine!
-    gameLoop();
-</script>
-
-<script>
-    const UI_UPDATE_INTERVAL = 500;
-    let lastUpdate = 0;
-
-    // Tab Switching Logic
     function switchTab(tab) {
         const tabs = ['stats', 'ship', 'up'];
         const btnMap = { 'stats': 'tab-stats', 'ship': 'tab-ship', 'up': 'tab-up' };
@@ -399,7 +354,6 @@ while(true) {
         tabs.forEach(t => {
             const btn = document.getElementById(btnMap[t]);
             const content = document.getElementById(contentMap[t]);
-            
             if (t === tab) {
                 btn.classList.add('bg-primary', 'text-on-primary', 'pixel-border-pressed', 'font-bold');
                 btn.classList.remove('bg-surface-container', 'text-on-surface-variant', 'pixel-border');
@@ -412,81 +366,66 @@ while(true) {
         });
     }
 
-    // Code Editor Syntax Highlighting
     const codeArea = document.getElementById('code-textarea');
     const highlightLayer = document.getElementById('code-editor-layer');
+    const scrollContainer = document.getElementById('code-scroll-container');
+    const lineNumbers = document.getElementById('code-line-numbers');
 
     function custom_syntax_highlighter(code) {
-        // Escape HTML
         let html = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        
-        // Keywords
         const keywords = ['while', 'if', 'else', 'true', 'false'];
         keywords.forEach(kw => {
-            const regex = new RegExp(`\\b${kw}\\b`, 'g');
-            html = html.replace(regex, `<span class="token-keyword">${kw}</span>`);
+            html = html.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="token-keyword">${kw}</span>`);
         });
-
-        // Functions/Actions
-        const actions = ['move', 'pickup', 'dropoff', 'find', 'call', 'deliver', 'charge'];
+        const actions = ['move', 'pickup', 'dropoff', 'find', 'call', 'deliver', 'charge', 'turnRight', 'turnLeft'];
         actions.forEach(action => {
-            const regex = new RegExp(`\\b${action}\\b`, 'g');
-            html = html.replace(regex, `<span class="token-function">${action}</span>`);
+            html = html.replace(new RegExp(`\\b${action}\\b`, 'g'), `<span class="token-function">${action}</span>`);
         });
-
-        // Comments
         html = html.replace(/(\/\/.*)/g, '<span class="token-comment">$1</span>');
-
-        // Strings/Params (simple check for uppercase constants)
         html = html.replace(/\b([A-Z_]+)\b/g, '<span class="token-string">$1</span>');
-
         return html;
     }
 
-    function updateHighlighter() {
-        highlightLayer.innerHTML = custom_syntax_highlighter(codeArea.value) + "\n";
+    function updateEditorMetrics() {
+        const code = codeArea.value;
+        
+        // Update syntax highlight layer
+        highlightLayer.innerHTML = custom_syntax_highlighter(code) + "\n";
+
+        // Dynamically compute lines and generate number markers
+        const lineCount = code.split('\n').length;
+        let numbersHTML = '';
+        for (let i = 1; i <= lineCount; i++) {
+            numbersHTML += `<div id="line-num-${i}" style="height: 20px; line-height: 20px;">${i}</div>`;
+        }
+        lineNumbers.innerHTML = numbersHTML;
+
+        // Auto-expand textarea height matching content block to allow full vertical stretching & scrolling
+        codeArea.style.height = '0px';
+        const scrollH = codeArea.scrollHeight;
+        codeArea.style.height = Math.max(scrollH, scrollContainer.clientHeight) + 'px';
+        highlightLayer.style.height = codeArea.style.height;
+
+        // Sync text width bounds for horizontal scrolling if lines go wide
+        const maxLineLength = Math.max(...code.split('\n').map(l => l.length), 20);
+        const dynamicWidth = Math.max(maxLineLength * 8 + 40, scrollContainer.clientWidth);
+        codeArea.style.width = dynamicWidth + 'px';
+        highlightLayer.style.width = dynamicWidth + 'px';
     }
 
-    codeArea.addEventListener('input', updateHighlighter);
-    codeArea.addEventListener('scroll', () => {
-        highlightLayer.scrollTop = codeArea.scrollTop;
+    // Synchronize scrolling between text area, syntax highlight, and line numbers tracker
+    scrollContainer.addEventListener('scroll', () => {
+        lineNumbers.scrollTop = scrollContainer.scrollTop;
     });
 
-    // Initialize highlighter
-    updateHighlighter();
-
-    // Throttled UI Updates
-    function updateDashboard(timestamp) {
-        if (!lastUpdate || timestamp - lastUpdate >= UI_UPDATE_INTERVAL) {
-            lastUpdate = timestamp;
-            
-            // Randomly fluctuate some stats for visual interest
-            const throughput = (93 + Math.random() * 2).toFixed(1);
-            const errors = (0.01 + Math.random() * 0.02).toFixed(3);
-            const power = 80 + Math.floor(Math.random() * 10);
-            
-            const throughputEl = document.getElementById('ui-throughput');
-            const throughputBar = document.getElementById('ui-throughput-bar');
-            const errorsEl = document.getElementById('ui-errors');
-            const powerEl = document.getElementById('ui-power');
-            const graph = document.getElementById('flow-graph-container');
-
-            if (throughputEl) throughputEl.textContent = `${throughput}%`;
-            if (throughputBar) throughputBar.style.width = `${throughput}%`;
-            if (errorsEl) errorsEl.textContent = `${errors}%`;
-            if (powerEl) powerEl.textContent = `${power}%`;
-            
-            // Update flow graph
-            if (graph) {
-                const bars = graph.children;
-                for (let bar of bars) {
-                    bar.style.height = `${20 + Math.random() * 70}%`;
-                }
-            }
-        }
-        requestAnimationFrame(updateDashboard);
-    }
-
-    requestAnimationFrame(updateDashboard);
+    codeArea.addEventListener('input', updateEditorMetrics);
+    window.addEventListener('resize', updateEditorMetrics);
+    
+    // Initial setup call
+    updateEditorMetrics();
 </script>
-</body></html>
+<!-- LINKED BOT CONTROLLER SCRIPT -->
+<script src="bot-controller.js"></script>
+</body>
+</html>
+```[cite: 5, 6]
