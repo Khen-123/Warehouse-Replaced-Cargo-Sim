@@ -13,6 +13,7 @@ const BOT_COMMAND_LIBRARY = Object.freeze({
     pickup: 'pickup',
     dropoff: 'dropoff',
     scan: 'scan',
+    isBlocked: 'isBlocked',
 });
 
 // Helper for Levenshtein distance calculation to provide accurate "did you mean" suggestions
@@ -49,8 +50,10 @@ class BotController {
         this.gridHeight = options.gridHeight || 16;
         this.gridSize = options.gridSize || 32;
 
-        this.worldObjects = new Map(options.worldObjects || [['5,2', 'crate']]);
-        this.deliveryZones = new Set(options.deliveryZones || ['6,2']);
+        // Cargo location at (3, 5)
+        this.worldObjects = new Map(options.worldObjects || [['3,5', 'crate']]);
+        // Delivery zone location at (7, 5)
+        this.deliveryZones = new Set(options.deliveryZones || ['7,5']);
         this.collisionObjects = new Set(options.collisionObjects || []);
 
         this.taskQueue = [];
@@ -79,97 +82,298 @@ class BotController {
 
     isInBounds(x, y) { return x >= 0 && y >= 0 && x < this.gridWidth && y < this.gridHeight; }
 
-    isBlocked(x, y) {
-        const key = this.toTileKey(x, y);
-        return !this.isInBounds(x, y) || this.collisionObjects.has(key);
+    isBlocked() {
+        const front = this.getFrontTile();
+        const key = this.toTileKey(front.x, front.y);
+        return !this.isInBounds(front.x, front.y) || this.collisionObjects.has(key);
     }
 
     queueCommand(commandName) {
-        this.taskQueue.push({ name: commandName });
+        this.taskQueue.push({ type: 'COMMAND', name: commandName });
     }
 
-    tokenizeScript(scriptString) {
-        const commands = [];
+    evaluateCondition(condStr) {
+        const clean = condStr.trim().replace(/\s+/g, '');
+        if (clean === 'isBlocked()==false' || clean === '!isBlocked()' || clean === 'isBlocked()==1' === false) {
+            return !this.isBlocked();
+        }
+        if (clean === 'isBlocked()==true' || clean === 'isBlocked()' || clean === 'isBlocked()==1') {
+            return this.isBlocked();
+        }
+        if (clean.startsWith('scan()')) {
+            const parts = clean.split('==');
+            if (parts.length === 2) {
+                const target = parts[1].trim().replace(/['"]/g, '');
+                return this.scan() === target;
+            }
+        }
+        return false;
+    }
+
+    tokenizeAndCompileScript(scriptString) {
         const lines = scriptString.split('\n');
         const validCommands = Object.keys(BOT_COMMAND_LIBRARY);
         const collectedErrors = [];
 
-        for (let i = 0; i < lines.length; i++) {
-            const rawLine = lines[i];
-            const trimmed = rawLine.trim();
+        // Pre-process script to handle multiline closures or line-splitting safely
+        const tokens = [];
+        lines.forEach((rawLine, idx) => {
+            const lineNum = idx + 1;
+            let trimmed = rawLine.trim();
+            if (!trimmed || trimmed.startsWith('//')) return;
 
-            // Skip empty lines or full-line comments
-            if (!trimmed || trimmed.startsWith('//')) {
-                continue;
+            // Handle inline closing braces or compound lines like `} else {`
+            if (trimmed.includes('} else')) {
+                const parts = trimmed.split('} else');
+                tokens.push({ lineNum, text: parts[0].trim() + '}', raw: rawLine });
+                tokens.push({ lineNum, text: 'else ' + parts[1].trim(), raw: rawLine });
+                return;
             }
 
-            // Remove inline comments for token analysis
-            const cleanContent = trimmed.split('//')[0].trim();
-            if (!cleanContent) continue;
-
-            // Strict C-like syntax validation: must end with a semicolon
-            if (!cleanContent.endsWith(';')) {
-                collectedErrors.push({
-                    lineNum: i + 1,
-                    lineText: rawLine,
-                    message: `Expected ';' at end of statement`,
-                    suggestion: `${cleanContent};`
-                });
-                continue;
+            if (trimmed.includes('}') && !trimmed.startsWith('}')) {
+                const parts = trimmed.split('}');
+                const firstPart = parts[0].trim();
+                if (firstPart) tokens.push({ lineNum, text: firstPart, raw: rawLine });
+                tokens.push({ lineNum, text: '}', raw: rawLine });
+                const remaining = parts.slice(1).join('}').trim();
+                if (remaining) tokens.push({ lineNum, text: remaining, raw: rawLine });
+                return;
             }
 
-            // Strip trailing semicolon for function identification
-            const stmtBody = cleanContent.slice(0, -1).trim();
+            tokens.push({ lineNum, text: trimmed, raw: rawLine });
+        });
 
-            const tokenPattern = /^([a-zA-Z_]\w*)\s*\((.*?)\)$/;
-            const match = stmtBody.match(tokenPattern);
+        let tokenIndex = 0;
 
-            if (!match) {
-                collectedErrors.push({
-                    lineNum: i + 1,
-                    lineText: rawLine,
-                    message: `Invalid statement syntax structure`,
-                    suggestion: `${stmtBody}();`
-                });
-                continue;
-            }
+        const parseBlock = (isTopLevel = false) => {
+            const instructions = [];
 
-            const commandName = match[1];
+            while (tokenIndex < tokens.length) {
+                const token = tokens[tokenIndex];
+                const trimmed = token.text;
+                const lineNum = token.lineNum;
 
-            // Case-sensitivity and spelling validation against available commands
-            if (!BOT_COMMAND_LIBRARY[commandName]) {
-                // Find closest suggestion using Levenshtein distance
-                let closest = validCommands[0];
-                let minDst = Infinity;
-                validCommands.forEach(vc => {
-                    const dst = getLevenshteinDistance(commandName, vc);
-                    if (dst < minDst) {
-                        minDst = dst;
-                        closest = vc;
+                // Handle closing braces
+                if (trimmed === '}' || trimmed.startsWith('}')) {
+                    tokenIndex++;
+                    if (isTopLevel) {
+                        // At the top level, trailing closing braces closing compound blocks are safely skipped
+                        continue;
                     }
-                });
+                    return instructions;
+                }
 
-                collectedErrors.push({
-                    lineNum: i + 1,
-                    lineText: rawLine,
-                    message: `Use of undeclared or misspelled function '${commandName}'`,
-                    suggestion: `${closest}(${match[2]});`
-                });
-                continue;
+                // Handle WHILE loop block
+                if (trimmed.startsWith('while')) {
+                    const match = trimmed.match(/^while\s*\((.*?)\)\s*(\{)?/);
+                    if (!match) {
+                        collectedErrors.push({ 
+                            lineNum: lineNum, 
+                            lineText: token.raw, 
+                            message: `In line ${lineNum}: Invalid while loop syntax`, 
+                            suggestion: `while (condition) {` 
+                        });
+                        tokenIndex++;
+                        continue;
+                    }
+                    if (!trimmed.includes('{')) {
+                        collectedErrors.push({ 
+                            lineNum: lineNum, 
+                            lineText: token.raw, 
+                            message: `In line ${lineNum}: Missing opening bracket '{' after while condition`, 
+                            suggestion: `while (${match[1]}) {` 
+                        });
+                    }
+                    const condition = match[1].trim();
+                    tokenIndex++;
+                    const body = parseBlock(false);
+                    instructions.push({
+                        type: 'WHILE',
+                        condition: condition,
+                        body: body
+                    });
+                    continue;
+                }
+
+                // Handle FOR loop block
+                if (trimmed.startsWith('for')) {
+                    const match = trimmed.match(/^for\s*\((.*?)\)\s*(\{)?/);
+                    if (!match) {
+                        collectedErrors.push({ 
+                            lineNum: lineNum, 
+                            lineText: token.raw, 
+                            message: `In line ${lineNum}: Invalid for loop syntax`, 
+                            suggestion: `for (let i = 0; i < 3; i++) {` 
+                        });
+                        tokenIndex++;
+                        continue;
+                    }
+                    if (!trimmed.includes('{')) {
+                        collectedErrors.push({ 
+                            lineNum: lineNum, 
+                            lineText: token.raw, 
+                            message: `In line ${lineNum}: Missing opening bracket '{' after for loop declaration`, 
+                            suggestion: `${trimmed} {` 
+                        });
+                    }
+                    const headerParts = match[1].split(';');
+                    let limit = 1;
+                    if (headerParts.length >= 2) {
+                        const numMatch = headerParts[1].match(/<\s*(\d+)/);
+                        if (numMatch) limit = parseInt(numMatch[1], 10);
+                    }
+
+                    tokenIndex++;
+                    const body = parseBlock(false);
+
+                    for (let step = 0; step < limit; step++) {
+                        body.forEach(cmd => instructions.push(JSON.parse(JSON.stringify(cmd))));
+                    }
+                    continue;
+                }
+
+                // Handle IF conditional block
+                if (trimmed.startsWith('if')) {
+                    const match = trimmed.match(/^if\s*\((.*?)\)\s*(\{)?/);
+                    if (!match) {
+                        collectedErrors.push({ lineNum: lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid if statement syntax`, suggestion: `if (condition) {` });
+                        tokenIndex++;
+                        continue;
+                    }
+                    if (!trimmed.includes('{')) {
+                        collectedErrors.push({ 
+                            lineNum: lineNum, 
+                            lineText: token.raw, 
+                            message: `In line ${lineNum}: Missing opening bracket '{' after if condition`, 
+                            suggestion: `if (${match[1]}) {` 
+                        });
+                    }
+                    const condition = match[1].trim();
+                    tokenIndex++;
+                    const ifBody = parseBlock(false);
+
+                    let elseBody = [];
+                    if (tokenIndex < tokens.length) {
+                        let nextToken = tokens[tokenIndex];
+                        if (nextToken.text.startsWith('else')) {
+                            tokenIndex++; 
+                            if (tokenIndex < tokens.length && tokens[tokenIndex].text === '{') {
+                                tokenIndex++; 
+                                elseBody = parseBlock(false);
+                            } else if (nextToken.text.includes('{')) {
+                                elseBody = parseBlock(false);
+                            } else {
+                                collectedErrors.push({
+                                    lineNum: nextToken.lineNum,
+                                    lineText: nextToken.raw,
+                                    message: `In line ${nextToken.lineNum}: Missing opening bracket '{' after else statement`,
+                                    suggestion: `else {`
+                                });
+                            }
+                        }
+                    }
+
+                    instructions.push({
+                        type: 'IF',
+                        condition: condition,
+                        ifBody: ifBody,
+                        elseBody: elseBody
+                    });
+                    continue;
+                }
+
+                // Handle ELSE standalone token
+                if (trimmed.startsWith('else')) {
+                    collectedErrors.push({
+                        lineNum: lineNum,
+                        lineText: token.raw,
+                        message: `In line ${lineNum}: Orphaned 'else' statement without a preceding 'if' block`,
+                        suggestion: `Attach to an 'if' block`
+                    });
+                    tokenIndex++;
+                    continue;
+                }
+
+                // Standard single line statements
+                let cleanContent = trimmed.split('//')[0].trim();
+                if (cleanContent.endsWith('{')) {
+                    cleanContent = cleanContent.slice(0, -1).trim();
+                }
+
+                if (!cleanContent) {
+                    tokenIndex++;
+                    continue;
+                }
+
+                if (!cleanContent.endsWith(';')) {
+                    collectedErrors.push({
+                        lineNum: lineNum,
+                        lineText: token.raw,
+                        message: `In line ${lineNum}: Expected ';' at end of statement`,
+                        suggestion: `${cleanContent};`
+                    });
+                    tokenIndex++;
+                    continue;
+                }
+
+                const stmtBody = cleanContent.slice(0, -1).trim();
+                const match = stmtBody.match(/^([a-zA-Z_]\w*)\s*\((.*?)\)$/);
+
+                if (!match) {
+                    collectedErrors.push({
+                        lineNum: lineNum,
+                        lineText: token.raw,
+                        message: `In line ${lineNum}: Invalid statement syntax structure`,
+                        suggestion: `${stmtBody};`
+                    });
+                    tokenIndex++;
+                    continue;
+                }
+
+                const commandName = match[1];
+                if (!BOT_COMMAND_LIBRARY[commandName]) {
+                    let closest = validCommands[0];
+                    let minDst = Infinity;
+                    validCommands.forEach(vc => {
+                        const dst = getLevenshteinDistance(commandName, vc);
+                        if (dst < minDst) { minDst = dst; closest = vc; }
+                    });
+                    collectedErrors.push({
+                        lineNum: lineNum,
+                        lineText: token.raw,
+                        message: `In line ${lineNum}: Use of undeclared or misspelled function '${commandName}'`,
+                        suggestion: `${closest}(${match[2]});`
+                    });
+                    tokenIndex++;
+                    continue;
+                }
+
+                instructions.push({ type: 'COMMAND', name: commandName });
+                tokenIndex++;
             }
 
-            commands.push(commandName);
-        }
+            if (!isTopLevel) {
+                collectedErrors.push({
+                    lineNum: lines.length,
+                    lineText: lines[lines.length - 1] || '',
+                    message: `Block closure error: Missing closing bracket '}' for code block body`,
+                    suggestion: `Add '}' at the end of the block body`
+                });
+            }
+
+            return instructions;
+        };
+
+        const compiledInstructions = parseBlock(true);
 
         if (collectedErrors.length > 0) {
-            throw collectedErrors; // Multi-line error collection handler
+            throw collectedErrors;
         }
 
-        return commands;
+        return compiledInstructions;
     }
 
     parseAndExecute(scriptString) {
-        // If a script is currently running or executing commands, ignore clicks completely
         if (this.taskQueue.length > 0 || this.taskState !== 'IDLE') {
             return;
         }
@@ -177,14 +381,18 @@ class BotController {
         clearErrorHighlights();
 
         try {
-            const commandNames = this.tokenizeScript(scriptString);
-            if (commandNames.length === 0) return;
-            commandNames.forEach(cmd => this.queueCommand(cmd));
+            const instructions = this.tokenizeAndCompileScript(scriptString);
             
-            // Lock UI button state and apply gray hue when execution sequence starts
+            if (instructions.length === 0) {
+                return;
+            }
+
+            this.taskQueue = instructions;
             setRunButtonState(false);
         } catch (errs) {
             console.error(errs);
+            setRunButtonState(true);
+
             if (Array.isArray(errs)) {
                 highlightMultipleErrors(errs);
             } else if (errs && errs.lineNum) {
@@ -230,6 +438,7 @@ class BotController {
             case BOT_COMMAND_LIBRARY.pickup: return this.pickup();
             case BOT_COMMAND_LIBRARY.dropoff: return this.dropoff();
             case BOT_COMMAND_LIBRARY.scan: return this.scan();
+            case BOT_COMMAND_LIBRARY.isBlocked: return this.isBlocked();
         }
     }
 
@@ -237,8 +446,12 @@ class BotController {
         const direction = this.getFacingVector();
         const nextX = this.bot.x + direction.x;
         const nextY = this.bot.y + direction.y;
-        if (this.isBlocked(nextX, nextY)) {
+        if (this.isBlocked() || !this.isInBounds(nextX, nextY)) {
             this.setTaskState('BLOCKED');
+            this.displayError('ERR: Movement blocked by obstacle/boundary');
+            this.taskQueue = [];
+            this.setTaskState('IDLE');
+            setRunButtonState(true);
             return;
         }
         this.setTaskState('MOVING');
@@ -285,24 +498,42 @@ class BotController {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
         this.lastScanResult = this.worldObjects.get(key) || 'empty';
+        return this.lastScanResult;
     }
 
     update(now = performance.now()) {
         if (this.taskState !== 'IDLE' || this.taskQueue.length === 0) return;
         if (now - this.lastCommandAt < this.commandDelayMs) return;
         
-        const nextTask = this.taskQueue.shift();
+        const nextTask = this.taskQueue[0];
         this.lastCommandAt = now;
-        this.executeCommand(nextTask.name);
 
-        // Check if queue has fully completed execution; if so, restore button interactivity & color
+        if (nextTask.type === 'COMMAND') {
+            this.taskQueue.shift();
+            this.executeCommand(nextTask.name);
+        } else if (nextTask.type === 'WHILE') {
+            const conditionMet = this.evaluateCondition(nextTask.condition);
+            if (conditionMet) {
+                this.taskQueue.shift();
+                this.taskQueue.unshift(...JSON.parse(JSON.stringify(nextTask.body)), nextTask);
+            } else {
+                this.taskQueue.shift();
+            }
+        } else if (nextTask.type === 'IF') {
+            const conditionMet = this.evaluateCondition(nextTask.condition);
+            this.taskQueue.shift();
+            const activeBranch = conditionMet ? nextTask.ifBody : nextTask.elseBody;
+            if (activeBranch && activeBranch.length > 0) {
+                this.taskQueue.unshift(...JSON.parse(JSON.stringify(activeBranch)));
+            }
+        }
+
         if (this.taskQueue.length === 0 && this.taskState === 'IDLE') {
             setRunButtonState(true);
         }
     }
 }
 
-// Button State Handler for Gray Hue & Interactivity Lock
 function setRunButtonState(isInteractive) {
     const btn = document.getElementById('run-script-btn');
     if (!btn) return;
@@ -311,30 +542,30 @@ function setRunButtonState(isInteractive) {
         btn.removeAttribute('disabled');
         btn.style.opacity = '1';
         btn.style.cursor = 'pointer';
-        // Restore original yellow/amber container color scheme
         btn.className = "mt-4 bg-primary-container text-on-primary-container font-code-sm text-code-sm py-3 pixel-border hover:brightness-110 active:shadow-[inset_2px_2px_0px_#000] transition-all flex items-center justify-center gap-2 group";
     } else {
         btn.setAttribute('disabled', 'true');
         btn.style.opacity = '0.65';
         btn.style.cursor = 'not-allowed';
-        // Apply grayed-out hue styling matching surface-container variants
         btn.className = "mt-4 bg-surface-container-high text-on-surface-variant font-code-sm text-code-sm py-3 pixel-border transition-all flex items-center justify-center gap-2 group";
     }
 }
 
-// Compiler Error Highlighting helpers supporting Multiple Lines & Red Bar Highlights
 function highlightMultipleErrors(errors) {
     const errorSummaries = [];
 
     errors.forEach(err => {
-        // Highlight line number element in red
         const lineNumEl = document.getElementById(`line-num-${err.lineNum}`);
         if (lineNumEl) {
             lineNumEl.style.backgroundColor = '#93000a';
             lineNumEl.style.color = '#ffdad6';
             lineNumEl.style.fontWeight = '700';
         }
-        errorSummaries.push(`[Line ${err.lineNum}]: ${err.message} <span style="color: #ffd588;">(suggestion: ${err.suggestion})</span>`);
+        if (err.suggestion) {
+            errorSummaries.push(`${err.message} <span style="color: #ffd588;">suggestion: ${err.suggestion}</span>`);
+        } else {
+            errorSummaries.push(`${err.message}`);
+        }
     });
 
     const container = document.getElementById('VIEWPORT_ACTIVE');
@@ -383,13 +614,14 @@ function initBotVisualizer(controller, containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
 
+    // Crate visual element at (3, 5)
     const crateEl = document.createElement('div');
     crateEl.style.position = 'absolute';
     crateEl.style.width = '32px';
     crateEl.style.height = '32px';
     crateEl.style.backgroundColor = '#f4b41b';
-    crateEl.style.left = (5 * 32) + 'px';
-    crateEl.style.top = (2 * 32) + 'px';
+    crateEl.style.left = (3 * 32) + 'px';
+    crateEl.style.top = (5 * 32) + 'px';
     crateEl.style.border = '2px solid #ffd588';
     crateEl.style.display = 'flex';
     crateEl.style.alignItems = 'center';
@@ -397,13 +629,14 @@ function initBotVisualizer(controller, containerId) {
     crateEl.innerHTML = '<span class="material-symbols-outlined text-xs text-on-primary">box</span>';
     container.appendChild(crateEl);
 
+    // Delivery zone visual element at (7, 5)
     const zoneEl = document.createElement('div');
     zoneEl.style.position = 'absolute';
     zoneEl.style.width = '32px';
     zoneEl.style.height = '32px';
     zoneEl.style.backgroundColor = 'rgba(140, 242, 114, 0.2)';
-    zoneEl.style.left = (6 * 32) + 'px';
-    zoneEl.style.top = (2 * 32) + 'px';
+    zoneEl.style.left = (7 * 32) + 'px';
+    zoneEl.style.top = (5 * 32) + 'px';
     zoneEl.style.border = '2px dashed #8cf272';
     container.appendChild(zoneEl);
 
@@ -437,11 +670,9 @@ function initBotVisualizer(controller, containerId) {
     updateVisuals();
 }
 
-// Initialize Controller & Systems globally
 window.botController = new BotController({ commandDelayMs: 400 });
 initBotVisualizer(window.botController, 'VIEWPORT_ACTIVE');
 
-// Main Game Loop Engine Tick
 function gameLoop() {
     if (window.botController) {
         window.botController.update();

@@ -148,13 +148,7 @@
         .token-string { color: #ffb4a6; }
 
         #code-editor-layer {
-            pointer-events: none;
-            white-space: pre;
-            padding: 8px;
-            position: absolute;
-            top: 0;
-            left: 0;
-            min-width: 100%;
+            display: none !important;
         }
 
         #code-textarea {
@@ -168,6 +162,9 @@
             width: 100%;
             height: 100%;
             padding: 8px;
+            background: transparent;
+            color: #e1e1f7;
+            caret-color: #8cf272;
         }
     </style>
 </head>
@@ -239,7 +236,7 @@
             </div>
 <div class="relative flex-1 overflow-auto terminal-scroll" id="code-scroll-container">
 <div class="absolute inset-0 text-transparent leading-5 pointer-events-none" id="code-editor-layer"></div>
-<textarea class="bg-transparent border-none focus:ring-0 text-on-surface resize-none font-code-sm leading-5 caret-tertiary" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
+<textarea class="border-none focus:ring-0 resize-none font-code-sm leading-5" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
 move();
 move();
 turnRight();
@@ -367,30 +364,11 @@ dropoff();</textarea>
     }
 
     const codeArea = document.getElementById('code-textarea');
-    const highlightLayer = document.getElementById('code-editor-layer');
     const scrollContainer = document.getElementById('code-scroll-container');
     const lineNumbers = document.getElementById('code-line-numbers');
 
-    function custom_syntax_highlighter(code) {
-        let html = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const keywords = ['while', 'if', 'else', 'true', 'false'];
-        keywords.forEach(kw => {
-            html = html.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="token-keyword">${kw}</span>`);
-        });
-        const actions = ['move', 'pickup', 'dropoff', 'find', 'call', 'deliver', 'charge', 'turnRight', 'turnLeft'];
-        actions.forEach(action => {
-            html = html.replace(new RegExp(`\\b${action}\\b`, 'g'), `<span class="token-function">${action}</span>`);
-        });
-        html = html.replace(/(\/\/.*)/g, '<span class="token-comment">$1</span>');
-        html = html.replace(/\b([A-Z_]+)\b/g, '<span class="token-string">$1</span>');
-        return html;
-    }
-
     function updateEditorMetrics() {
         const code = codeArea.value;
-        
-        // Update syntax highlight layer
-        highlightLayer.innerHTML = custom_syntax_highlighter(code) + "\n";
 
         // Dynamically compute lines and generate number markers
         const lineCount = code.split('\n').length;
@@ -404,16 +382,14 @@ dropoff();</textarea>
         codeArea.style.height = '0px';
         const scrollH = codeArea.scrollHeight;
         codeArea.style.height = Math.max(scrollH, scrollContainer.clientHeight) + 'px';
-        highlightLayer.style.height = codeArea.style.height;
 
         // Sync text width bounds for horizontal scrolling if lines go wide
         const maxLineLength = Math.max(...code.split('\n').map(l => l.length), 20);
         const dynamicWidth = Math.max(maxLineLength * 8 + 40, scrollContainer.clientWidth);
         codeArea.style.width = dynamicWidth + 'px';
-        highlightLayer.style.width = dynamicWidth + 'px';
     }
 
-    // Synchronize scrolling between text area, syntax highlight, and line numbers tracker
+    // Synchronize scrolling between text area and line numbers tracker
     scrollContainer.addEventListener('scroll', () => {
         lineNumbers.scrollTop = scrollContainer.scrollTop;
     });
@@ -428,4 +404,3 @@ dropoff();</textarea>
 <script src="bot-controller.js"></script>
 </body>
 </html>
-```[cite: 5, 6]
