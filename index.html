@@ -165,6 +165,7 @@
             background: transparent;
             color: #e1e1f7;
             caret-color: #8cf272;
+            box-sizing: border-box;
         }
     </style>
 </head>
@@ -230,13 +231,15 @@
 </div>
 <div class="flex-1 relative bg-surface-container-lowest pixel-border overflow-hidden flex font-code-sm group">
 <div class="scanline"></div>
-<!-- Dynamic Line Numbers Column -->
-<div class="w-10 bg-surface-container text-outline-variant text-right pr-2 pt-2 select-none border-r border-outline-variant leading-5 overflow-hidden terminal-scroll" id="code-line-numbers">
+<!-- Static Line Numbers Column using requestAnimationFrame transform synchronization -->
+<div class="w-10 bg-surface-container text-outline-variant text-right pr-2 select-none border-r border-outline-variant overflow-hidden relative" id="code-line-gutter">
+<div class="absolute top-0 left-0 w-full pt-[8px] leading-5 font-code-sm text-code-sm" id="code-line-numbers">
                 1
             </div>
+</div>
 <div class="relative flex-1 overflow-auto terminal-scroll" id="code-scroll-container">
 <div class="absolute inset-0 text-transparent leading-5 pointer-events-none" id="code-editor-layer"></div>
-<textarea class="border-none focus:ring-0 resize-none font-code-sm leading-5" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
+<textarea class="border-none focus:ring-0 resize-none font-code-sm leading-5 pt-[8px]" id="code-textarea" spellcheck="false">// DEFINE BOT BEHAVIOR
 move();
 move();
 turnRight();
@@ -370,7 +373,7 @@ dropoff();</textarea>
     function updateEditorMetrics() {
         const code = codeArea.value;
 
-        // Dynamically compute lines and generate number markers
+        // Dynamically compute lines and generate number markers matching 20px line height precisely
         const lineCount = code.split('\n').length;
         let numbersHTML = '';
         for (let i = 1; i <= lineCount; i++) {
@@ -378,7 +381,7 @@ dropoff();</textarea>
         }
         lineNumbers.innerHTML = numbersHTML;
 
-        // Auto-expand textarea height matching content block to allow full vertical stretching & scrolling
+        // Auto-expand textarea height matching content block to allow full vertical scrolling bounds
         codeArea.style.height = '0px';
         const scrollH = codeArea.scrollHeight;
         codeArea.style.height = Math.max(scrollH, scrollContainer.clientHeight) + 'px';
@@ -389,9 +392,16 @@ dropoff();</textarea>
         codeArea.style.width = dynamicWidth + 'px';
     }
 
-    // Synchronize scrolling between text area and line numbers tracker
+    // High-performance requestAnimationFrame scroll lock preventing any visual drift or scatter
+    let ticking = false;
     scrollContainer.addEventListener('scroll', () => {
-        lineNumbers.scrollTop = scrollContainer.scrollTop;
+        if (!ticking) {
+            window.requestAnimationFrame(() => {
+                lineNumbers.style.transform = `translateY(-${scrollContainer.scrollTop}px)`;
+                ticking = false;
+            });
+            ticking = true;
+        }
     });
 
     codeArea.addEventListener('input', updateEditorMetrics);

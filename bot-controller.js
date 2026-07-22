@@ -16,7 +16,6 @@ const BOT_COMMAND_LIBRARY = Object.freeze({
     isBlocked: 'isBlocked',
 });
 
-// Helper for Levenshtein distance calculation to provide accurate "did you mean" suggestions
 function getLevenshteinDistance(a, b) {
     const matrix = [];
     for (let i = 0; i <= b.length; i++) {
@@ -31,10 +30,10 @@ function getLevenshteinDistance(a, b) {
                 matrix[i][j] = matrix[i - 1][j - 1];
             } else {
                 matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1, // substitution
+                    matrix[i - 1][j - 1] + 1,
                     Math.min(
-                        matrix[i][j - 1] + 1, // insertion
-                        matrix[i - 1][j] + 1  // deletion
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
                     )
                 );
             }
@@ -50,9 +49,7 @@ class BotController {
         this.gridHeight = options.gridHeight || 16;
         this.gridSize = options.gridSize || 32;
 
-        // Cargo location at (3, 5)
         this.worldObjects = new Map(options.worldObjects || [['3,5', 'crate']]);
-        // Delivery zone location at (7, 5)
         this.deliveryZones = new Set(options.deliveryZones || ['7,5']);
         this.collisionObjects = new Set(options.collisionObjects || []);
 
@@ -64,15 +61,12 @@ class BotController {
         this.commandDelayMs = options.commandDelayMs || 400;
         this.lastCommandAt = 0;
 
-        // Rate limiting & execution lock properties
         this.lastExecutionAttemptAt = 0;
         this.executionCooldownMs = 1000;
     }
 
     getFacingVector() { return BOT_DIRECTIONS[this.bot.orientationIndex % BOT_DIRECTIONS.length]; }
-
     setTaskState(nextState) { this.taskState = nextState; }
-
     toTileKey(x, y) { return `${x},${y}`; }
 
     getFrontTile() {
@@ -115,14 +109,12 @@ class BotController {
         const validCommands = Object.keys(BOT_COMMAND_LIBRARY);
         const collectedErrors = [];
 
-        // Pre-process script to handle multiline closures or line-splitting safely
         const tokens = [];
         lines.forEach((rawLine, idx) => {
             const lineNum = idx + 1;
             let trimmed = rawLine.trim();
             if (!trimmed || trimmed.startsWith('//')) return;
 
-            // Handle inline closing braces or compound lines like `} else {`
             if (trimmed.includes('} else')) {
                 const parts = trimmed.split('} else');
                 tokens.push({ lineNum, text: parts[0].trim() + '}', raw: rawLine });
@@ -153,68 +145,37 @@ class BotController {
                 const trimmed = token.text;
                 const lineNum = token.lineNum;
 
-                // Handle closing braces
                 if (trimmed === '}' || trimmed.startsWith('}')) {
                     tokenIndex++;
-                    if (isTopLevel) {
-                        // At the top level, trailing closing braces closing compound blocks are safely skipped
-                        continue;
-                    }
+                    if (isTopLevel) continue;
                     return instructions;
                 }
 
-                // Handle WHILE loop block
                 if (trimmed.startsWith('while')) {
                     const match = trimmed.match(/^while\s*\((.*?)\)\s*(\{)?/);
                     if (!match) {
-                        collectedErrors.push({ 
-                            lineNum: lineNum, 
-                            lineText: token.raw, 
-                            message: `In line ${lineNum}: Invalid while loop syntax`, 
-                            suggestion: `while (condition) {` 
-                        });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid while loop syntax`, suggestion: `while (condition) {` });
                         tokenIndex++;
                         continue;
                     }
                     if (!trimmed.includes('{')) {
-                        collectedErrors.push({ 
-                            lineNum: lineNum, 
-                            lineText: token.raw, 
-                            message: `In line ${lineNum}: Missing opening bracket '{' after while condition`, 
-                            suggestion: `while (${match[1]}) {` 
-                        });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `while (${match[1]}) {` });
                     }
                     const condition = match[1].trim();
                     tokenIndex++;
-                    const body = parseBlock(false);
-                    instructions.push({
-                        type: 'WHILE',
-                        condition: condition,
-                        body: body
-                    });
+                    instructions.push({ type: 'WHILE', condition, body: parseBlock(false) });
                     continue;
                 }
 
-                // Handle FOR loop block
                 if (trimmed.startsWith('for')) {
                     const match = trimmed.match(/^for\s*\((.*?)\)\s*(\{)?/);
                     if (!match) {
-                        collectedErrors.push({ 
-                            lineNum: lineNum, 
-                            lineText: token.raw, 
-                            message: `In line ${lineNum}: Invalid for loop syntax`, 
-                            suggestion: `for (let i = 0; i < 3; i++) {` 
-                        });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid for loop syntax`, suggestion: `for (let i = 0; i < 3; i++) {` });
                         tokenIndex++;
                         continue;
                     }
                     if (!trimmed.includes('{')) {
-                        collectedErrors.push({ 
-                            lineNum: lineNum, 
-                            lineText: token.raw, 
-                            message: `In line ${lineNum}: Missing opening bracket '{' after for loop declaration`, 
-                            suggestion: `${trimmed} {` 
-                        });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `${trimmed} {` });
                     }
                     const headerParts = match[1].split(';');
                     let limit = 1;
@@ -222,31 +183,23 @@ class BotController {
                         const numMatch = headerParts[1].match(/<\s*(\d+)/);
                         if (numMatch) limit = parseInt(numMatch[1], 10);
                     }
-
                     tokenIndex++;
                     const body = parseBlock(false);
-
                     for (let step = 0; step < limit; step++) {
                         body.forEach(cmd => instructions.push(JSON.parse(JSON.stringify(cmd))));
                     }
                     continue;
                 }
 
-                // Handle IF conditional block
                 if (trimmed.startsWith('if')) {
                     const match = trimmed.match(/^if\s*\((.*?)\)\s*(\{)?/);
                     if (!match) {
-                        collectedErrors.push({ lineNum: lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid if statement syntax`, suggestion: `if (condition) {` });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid if statement syntax`, suggestion: `if (condition) {` });
                         tokenIndex++;
                         continue;
                     }
                     if (!trimmed.includes('{')) {
-                        collectedErrors.push({ 
-                            lineNum: lineNum, 
-                            lineText: token.raw, 
-                            message: `In line ${lineNum}: Missing opening bracket '{' after if condition`, 
-                            suggestion: `if (${match[1]}) {` 
-                        });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `if (${match[1]}) {` });
                     }
                     const condition = match[1].trim();
                     tokenIndex++;
@@ -263,55 +216,27 @@ class BotController {
                             } else if (nextToken.text.includes('{')) {
                                 elseBody = parseBlock(false);
                             } else {
-                                collectedErrors.push({
-                                    lineNum: nextToken.lineNum,
-                                    lineText: nextToken.raw,
-                                    message: `In line ${nextToken.lineNum}: Missing opening bracket '{' after else statement`,
-                                    suggestion: `else {`
-                                });
+                                collectedErrors.push({ lineNum: nextToken.lineNum, lineText: nextToken.raw, message: `In line ${nextToken.lineNum}: Missing opening bracket '{' after else`, suggestion: `else {` });
                             }
                         }
                     }
-
-                    instructions.push({
-                        type: 'IF',
-                        condition: condition,
-                        ifBody: ifBody,
-                        elseBody: elseBody
-                    });
+                    instructions.push({ type: 'IF', condition, ifBody, elseBody });
                     continue;
                 }
 
-                // Handle ELSE standalone token
                 if (trimmed.startsWith('else')) {
-                    collectedErrors.push({
-                        lineNum: lineNum,
-                        lineText: token.raw,
-                        message: `In line ${lineNum}: Orphaned 'else' statement without a preceding 'if' block`,
-                        suggestion: `Attach to an 'if' block`
-                    });
+                    collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Orphaned 'else' statement`, suggestion: `Attach to an 'if' block` });
                     tokenIndex++;
                     continue;
                 }
 
-                // Standard single line statements
                 let cleanContent = trimmed.split('//')[0].trim();
-                if (cleanContent.endsWith('{')) {
-                    cleanContent = cleanContent.slice(0, -1).trim();
-                }
+                if (cleanContent.endsWith('{')) cleanContent = cleanContent.slice(0, -1).trim();
 
-                if (!cleanContent) {
-                    tokenIndex++;
-                    continue;
-                }
+                if (!cleanContent) { tokenIndex++; continue; }
 
                 if (!cleanContent.endsWith(';')) {
-                    collectedErrors.push({
-                        lineNum: lineNum,
-                        lineText: token.raw,
-                        message: `In line ${lineNum}: Expected ';' at end of statement`,
-                        suggestion: `${cleanContent};`
-                    });
+                    collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Expected ';' at end of statement`, suggestion: `${cleanContent};` });
                     tokenIndex++;
                     continue;
                 }
@@ -320,12 +245,7 @@ class BotController {
                 const match = stmtBody.match(/^([a-zA-Z_]\w*)\s*\((.*?)\)$/);
 
                 if (!match) {
-                    collectedErrors.push({
-                        lineNum: lineNum,
-                        lineText: token.raw,
-                        message: `In line ${lineNum}: Invalid statement syntax structure`,
-                        suggestion: `${stmtBody};`
-                    });
+                    collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid statement syntax structure`, suggestion: `${stmtBody};` });
                     tokenIndex++;
                     continue;
                 }
@@ -338,12 +258,7 @@ class BotController {
                         const dst = getLevenshteinDistance(commandName, vc);
                         if (dst < minDst) { minDst = dst; closest = vc; }
                     });
-                    collectedErrors.push({
-                        lineNum: lineNum,
-                        lineText: token.raw,
-                        message: `In line ${lineNum}: Use of undeclared or misspelled function '${commandName}'`,
-                        suggestion: `${closest}(${match[2]});`
-                    });
+                    collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Misspelled function '${commandName}'`, suggestion: `${closest}(${match[2]});` });
                     tokenIndex++;
                     continue;
                 }
@@ -353,53 +268,32 @@ class BotController {
             }
 
             if (!isTopLevel) {
-                collectedErrors.push({
-                    lineNum: lines.length,
-                    lineText: lines[lines.length - 1] || '',
-                    message: `Block closure error: Missing closing bracket '}' for code block body`,
-                    suggestion: `Add '}' at the end of the block body`
-                });
+                collectedErrors.push({ lineNum: lines.length, lineText: lines[lines.length - 1] || '', message: `Block closure error: Missing closing bracket '}'`, suggestion: `Add '}'` });
             }
 
             return instructions;
         };
 
         const compiledInstructions = parseBlock(true);
-
-        if (collectedErrors.length > 0) {
-            throw collectedErrors;
-        }
-
+        if (collectedErrors.length > 0) throw collectedErrors;
         return compiledInstructions;
     }
 
     parseAndExecute(scriptString) {
-        if (this.taskQueue.length > 0 || this.taskState !== 'IDLE') {
-            return;
-        }
-
+        if (this.taskQueue.length > 0 || this.taskState !== 'IDLE') return;
         clearErrorHighlights();
 
         try {
             const instructions = this.tokenizeAndCompileScript(scriptString);
-            
-            if (instructions.length === 0) {
-                return;
-            }
-
+            if (instructions.length === 0) return;
             this.taskQueue = instructions;
             setRunButtonState(false);
         } catch (errs) {
             console.error(errs);
             setRunButtonState(true);
-
-            if (Array.isArray(errs)) {
-                highlightMultipleErrors(errs);
-            } else if (errs && errs.lineNum) {
-                highlightMultipleErrors([errs]);
-            } else {
-                this.displayError(`ERR: ${errs.message || errs}`);
-            }
+            if (Array.isArray(errs)) highlightMultipleErrors(errs);
+            else if (errs && errs.lineNum) highlightMultipleErrors([errs]);
+            else this.displayError(`ERR: ${errs.message || errs}`);
         }
     }
 
@@ -423,10 +317,7 @@ class BotController {
             banner.style.border = '2px solid #ffb4ab';
             banner.textContent = message;
             container.appendChild(banner);
-
-            setTimeout(() => {
-                banner.remove();
-            }, 2500);
+            setTimeout(() => banner.remove(), 2500);
         }
     }
 
@@ -488,9 +379,7 @@ class BotController {
             this.inventory = 'empty';
             this.gold += 50;
             const goldEl = document.getElementById('ui-gold');
-            if (goldEl) {
-                goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
-            }
+            if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
         }
     }
 
@@ -553,7 +442,6 @@ function setRunButtonState(isInteractive) {
 
 function highlightMultipleErrors(errors) {
     const errorSummaries = [];
-
     errors.forEach(err => {
         const lineNumEl = document.getElementById(`line-num-${err.lineNum}`);
         if (lineNumEl) {
@@ -591,7 +479,7 @@ function highlightMultipleErrors(errors) {
         banner.style.maxWidth = '90%';
         banner.style.maxHeight = '150px';
         banner.style.overflowY = 'auto';
-        banner.innerHTML = `<strong>COMPILE_ERR (${errors.length} issue${errors.length > 1 ? 's' : ''} detected):</strong><br>` + errorSummaries.join('<br>');
+        banner.innerHTML = `<strong>COMPILE_ERR (${errors.length} issue${errors.length > 1 ? 's' : ''}):</strong><br>` + errorSummaries.join('<br>');
         container.appendChild(banner);
     }
 }
@@ -609,12 +497,10 @@ function clearErrorHighlights() {
     if (banner) banner.remove();
 }
 
-// --- VISUALIZER: Strict 32x32 Snap & Elements ---
 function initBotVisualizer(controller, containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
 
-    // Crate visual element at (3, 5)
     const crateEl = document.createElement('div');
     crateEl.style.position = 'absolute';
     crateEl.style.width = '32px';
@@ -629,7 +515,6 @@ function initBotVisualizer(controller, containerId) {
     crateEl.innerHTML = '<span class="material-symbols-outlined text-xs text-on-primary">box</span>';
     container.appendChild(crateEl);
 
-    // Delivery zone visual element at (7, 5)
     const zoneEl = document.createElement('div');
     zoneEl.style.position = 'absolute';
     zoneEl.style.width = '32px';
