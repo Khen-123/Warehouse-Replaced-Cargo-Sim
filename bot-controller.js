@@ -8,6 +8,9 @@ const BOT_DIRECTIONS = [
 
 const BOT_COMMAND_LIBRARY = Object.freeze({
     move: 'move',
+    strafeLeft: 'strafeLeft',
+    strafeRight: 'strafeRight',
+    wait: 'wait',
     turnLeft: 'turnLeft',
     turnRight: 'turnRight',
     pickup: 'pickup',
@@ -44,7 +47,6 @@ function getLevenshteinDistance(a, b) {
 
 class BotController {
     constructor(options = {}) {
-        this.bot = options.bot || { x: 2, y: 2, orientationIndex: 0 };
         this.gridWidth = options.gridWidth || 16;
         this.gridHeight = options.gridHeight || 16;
         this.gridSize = options.gridSize || 32;
@@ -53,25 +55,105 @@ class BotController {
         this.deliveryZones = new Set(options.deliveryZones || ['7,5']);
         this.collisionObjects = new Set(options.collisionObjects || []);
 
-        this.taskQueue = [];
-        this.taskState = 'IDLE';
-        this.inventory = 'empty';
-        this.lastScanResult = 'empty';
+        // Multi-Bot Fleet Initialization (Aligning with WAREHOUSE_LEVELS & BOT Schema)
+        this.bots = options.bots || [
+            {
+                bot_id: 'MK-1_ROLLER_01',
+                x: 2,
+                y: 2,
+                orientationIndex: 0,
+                taskQueue: [],
+                taskState: 'IDLE',
+                inventory: 'empty',
+                lastScanResult: 'empty',
+                script: `// CONTINUOUS HARVEST LOOP\nwhile (inventory == 'empty') {\n    scan();\n    if (scan() == 'crate') {\n        pickup();\n    } else {\n        move();\n    }\n}\nstrafeRight(5);\ndropoff();`,
+                lastCommandAt: 0
+            },
+            {
+                bot_id: 'MK-1_ROLLER_02',
+                x: 4,
+                y: 2,
+                orientationIndex: 0,
+                taskQueue: [],
+                taskState: 'IDLE',
+                inventory: 'empty',
+                lastScanResult: 'empty',
+                script: `// SECONDARY BOT SCRIPT\nmove();\nturnRight();\nmove();`,
+                lastCommandAt: 0
+            }
+        ];
+
+        this.selectedBotId = this.bots[0].bot_id;
         this.gold = options.gold || 0;
         this.commandDelayMs = options.commandDelayMs || 400;
-        this.lastCommandAt = 0;
 
-        this.lastExecutionAttemptAt = 0;
-        this.executionCooldownMs = 1000;
+        this.initSelectorUI();
     }
 
-    getFacingVector() { return BOT_DIRECTIONS[this.bot.orientationIndex % BOT_DIRECTIONS.length]; }
-    setTaskState(nextState) { this.taskState = nextState; }
+    getActiveBot() {
+        return this.bots.find(b => b.bot_id === this.selectedBotId) || this.bots[0];
+    }
+
+    initSelectorUI() {
+        const selector = document.getElementById('bot-selector');
+        if (!selector) return;
+        selector.innerHTML = '';
+        this.bots.forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.bot_id;
+            opt.textContent = b.bot_id;
+            if (b.bot_id === this.selectedBotId) opt.selected = true;
+            selector.appendChild(opt);
+        });
+    }
+
+    selectBot(botId) {
+        // Save current textarea content to active bot script buffer before switching
+        const active = this.getActiveBot();
+        const textarea = document.getElementById('code-textarea');
+        if (active && textarea) {
+            active.script = textarea.value;
+        }
+
+        this.selectedBotId = botId;
+        const newActive = this.getActiveBot();
+        if (newActive && textarea) {
+            textarea.value = newActive.script;
+            if (typeof updateEditorMetrics === 'function') updateEditorMetrics();
+        }
+        clearErrorHighlights();
+
+        // Sync dropdown selector element UI state if out of sync
+        const selector = document.getElementById('bot-selector');
+        if (selector && selector.value !== botId) {
+            selector.value = botId;
+        }
+        
+        setRunButtonState(newActive.taskQueue.length === 0 && newActive.taskState === 'IDLE');
+    }
+
+    getFacingVector() { 
+        const bot = this.getActiveBot();
+        return BOT_DIRECTIONS[bot.orientationIndex % BOT_DIRECTIONS.length]; 
+    }
+
+    getStrafeVector(directionType) {
+        const bot = this.getActiveBot();
+        const offset = directionType === 'right' ? 1 : 3; 
+        return BOT_DIRECTIONS[(bot.orientationIndex + offset) % BOT_DIRECTIONS.length];
+    }
+    
+    setTaskState(nextState) { 
+        const bot = this.getActiveBot();
+        bot.taskState = nextState; 
+    }
+    
     toTileKey(x, y) { return `${x},${y}`; }
 
     getFrontTile() {
+        const bot = this.getActiveBot();
         const direction = this.getFacingVector();
-        return { x: this.bot.x + direction.x, y: this.bot.y + direction.y };
+        return { x: bot.x + direction.x, y: bot.y + direction.y };
     }
 
     isInBounds(x, y) { return x >= 0 && y >= 0 && x < this.gridWidth && y < this.gridHeight; }
@@ -79,23 +161,43 @@ class BotController {
     isBlocked() {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
-        return !this.isInBounds(front.x, front.y) || this.collisionObjects.has(key);
+        const botOccupied = this.bots.some(b => b.bot_id !== this.selectedBotId && b.x === front.x && b.y === front.y);
+        return !this.isInBounds(front.x, front.y) || this.collisionObjects.has(key) || botOccupied;
     }
 
-    queueCommand(commandName) {
-        this.taskQueue.push({ type: 'COMMAND', name: commandName });
+    isStrafeBlocked(strafeDir) {
+        const bot = this.getActiveBot();
+        const dir = this.getStrafeVector(strafeDir);
+        const nextX = bot.x + dir.x;
+        const nextY = bot.y + dir.y;
+        const key = this.toTileKey(nextX, nextY);
+        const botOccupied = this.bots.some(b => b.bot_id !== this.selectedBotId && b.x === nextX && b.y === nextY);
+        return !this.isInBounds(nextX, nextY) || this.collisionObjects.has(key) || botOccupied;
     }
 
     evaluateCondition(condStr) {
-        const clean = condStr.trim().replace(/\s+/g, '');
-        if (clean === 'isBlocked()==false' || clean === '!isBlocked()' || clean === 'isBlocked()==1' === false) {
+        const clean = condStr.trim();
+        const bot = this.getActiveBot();
+
+        if (clean.startsWith('inventory')) {
+            const parts = clean.split(/==|!=/);
+            if (parts.length === 2) {
+                const targetState = parts[1].trim().replace(/['"]/g, '');
+                const isNotEqual = clean.includes('!=');
+                const matches = bot.inventory === targetState;
+                return isNotEqual ? !matches : matches;
+            }
+        }
+
+        const cleanNoSpaces = clean.replace(/\s+/g, '');
+        if (cleanNoSpaces === 'isBlocked()==false' || cleanNoSpaces === '!isBlocked()' || cleanNoSpaces === 'isBlocked()==1' === false) {
             return !this.isBlocked();
         }
-        if (clean === 'isBlocked()==true' || clean === 'isBlocked()' || clean === 'isBlocked()==1') {
+        if (cleanNoSpaces === 'isBlocked()==true' || cleanNoSpaces === 'isBlocked()' || cleanNoSpaces === 'isBlocked()==1') {
             return this.isBlocked();
         }
-        if (clean.startsWith('scan()')) {
-            const parts = clean.split('==');
+        if (cleanNoSpaces.startsWith('scan()')) {
+            const parts = cleanNoSpaces.split('==');
             if (parts.length === 2) {
                 const target = parts[1].trim().replace(/['"]/g, '');
                 return this.scan() === target;
@@ -149,6 +251,25 @@ class BotController {
                     tokenIndex++;
                     if (isTopLevel) continue;
                     return instructions;
+                }
+
+                if (trimmed.startsWith('REPEAT') || trimmed.startsWith('repeat')) {
+                    const match = trimmed.match(/^(?:REPEAT|repeat)\s*\(\s*(\d+)\s*\)\s*(\{)?/);
+                    if (!match) {
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid REPEAT syntax`, suggestion: `REPEAT (3) {` });
+                        tokenIndex++;
+                        continue;
+                    }
+                    if (!trimmed.includes('{')) {
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `REPEAT (${match[1]}) {` });
+                    }
+                    const repeatCount = parseInt(match[1], 10);
+                    tokenIndex++;
+                    const blockBody = parseBlock(false);
+                    for (let i = 0; i < repeatCount; i++) {
+                        blockBody.forEach(cmd => instructions.push(JSON.parse(JSON.stringify(cmd))));
+                    }
+                    continue;
                 }
 
                 if (trimmed.startsWith('while')) {
@@ -251,6 +372,8 @@ class BotController {
                 }
 
                 const commandName = match[1];
+                const paramArg = match[2].trim();
+
                 if (!BOT_COMMAND_LIBRARY[commandName]) {
                     let closest = validCommands[0];
                     let minDst = Infinity;
@@ -263,7 +386,25 @@ class BotController {
                     continue;
                 }
 
-                instructions.push({ type: 'COMMAND', name: commandName });
+                if ((commandName === 'move' || commandName === 'strafeLeft' || commandName === 'strafeRight') && paramArg !== '') {
+                    const repeatSteps = parseInt(paramArg, 10);
+                    if (!isNaN(repeatSteps) && repeatSteps > 0) {
+                        for (let s = 0; s < repeatSteps; s++) {
+                            instructions.push({ type: 'COMMAND', name: commandName });
+                        }
+                    } else {
+                        instructions.push({ type: 'COMMAND', name: commandName });
+                    }
+                } else if (commandName === 'wait' && paramArg !== '') {
+                    const seconds = parseFloat(paramArg);
+                    if (!isNaN(seconds) && seconds > 0) {
+                        instructions.push({ type: 'COMMAND', name: 'wait', duration: seconds * 1000 });
+                    } else {
+                        instructions.push({ type: 'COMMAND', name: 'wait', duration: 1000 });
+                    }
+                } else {
+                    instructions.push({ type: 'COMMAND', name: commandName });
+                }
                 tokenIndex++;
             }
 
@@ -280,13 +421,14 @@ class BotController {
     }
 
     parseAndExecute(scriptString) {
-        if (this.taskQueue.length > 0 || this.taskState !== 'IDLE') return;
+        const bot = this.getActiveBot();
+        if (bot.taskQueue.length > 0 || bot.taskState !== 'IDLE') return;
         clearErrorHighlights();
 
         try {
             const instructions = this.tokenizeAndCompileScript(scriptString);
             if (instructions.length === 0) return;
-            this.taskQueue = instructions;
+            bot.taskQueue = instructions;
             setRunButtonState(false);
         } catch (errs) {
             console.error(errs);
@@ -321,9 +463,15 @@ class BotController {
         }
     }
 
-    executeCommand(commandName) {
-        switch (commandName) {
+    executeCommand(commandObj) {
+        const cmdName = typeof commandObj === 'object' ? commandObj.name : commandObj;
+        const duration = typeof commandObj === 'object' ? commandObj.duration : undefined;
+
+        switch (cmdName) {
             case BOT_COMMAND_LIBRARY.move: return this.move();
+            case BOT_COMMAND_LIBRARY.strafeLeft: return this.strafe('left');
+            case BOT_COMMAND_LIBRARY.strafeRight: return this.strafe('right');
+            case BOT_COMMAND_LIBRARY.wait: return this.wait(duration);
             case BOT_COMMAND_LIBRARY.turnLeft: return this.turnLeft();
             case BOT_COMMAND_LIBRARY.turnRight: return this.turnRight();
             case BOT_COMMAND_LIBRARY.pickup: return this.pickup();
@@ -334,40 +482,69 @@ class BotController {
     }
 
     move() {
+        const bot = this.getActiveBot();
         const direction = this.getFacingVector();
-        const nextX = this.bot.x + direction.x;
-        const nextY = this.bot.y + direction.y;
+        const nextX = bot.x + direction.x;
+        const nextY = bot.y + direction.y;
         if (this.isBlocked() || !this.isInBounds(nextX, nextY)) {
             this.setTaskState('BLOCKED');
             this.displayError('ERR: Movement blocked by obstacle/boundary');
-            this.taskQueue = [];
+            bot.taskQueue = [];
             this.setTaskState('IDLE');
             setRunButtonState(true);
             return;
         }
         this.setTaskState('MOVING');
-        this.bot.x = nextX;
-        this.bot.y = nextY;
+        bot.x = nextX;
+        bot.y = nextY;
         this.setTaskState('IDLE');
     }
 
+    strafe(strafeDir) {
+        const bot = this.getActiveBot();
+        const direction = this.getStrafeVector(strafeDir);
+        const nextX = bot.x + direction.x;
+        const nextY = bot.y + direction.y;
+        if (this.isStrafeBlocked(strafeDir) || !this.isInBounds(nextX, nextY)) {
+            this.setTaskState('BLOCKED');
+            this.displayError('ERR: Strafing blocked by obstacle/boundary');
+            bot.taskQueue = [];
+            this.setTaskState('IDLE');
+            setRunButtonState(true);
+            return;
+        }
+        this.setTaskState('STRAFING');
+        bot.x = nextX;
+        bot.y = nextY;
+        this.setTaskState('IDLE');
+    }
+
+    wait(durationMs = 1000) {
+        const bot = this.getActiveBot();
+        this.setTaskState('WAITING');
+        bot.waitCompleteAt = performance.now() + durationMs;
+    }
+
     turnLeft() {
+        const bot = this.getActiveBot();
         this.setTaskState('TURNING');
-        this.bot.orientationIndex = (this.bot.orientationIndex + 3) % BOT_DIRECTIONS.length;
+        bot.orientationIndex = (bot.orientationIndex + 3) % BOT_DIRECTIONS.length;
         this.setTaskState('IDLE');
     }
 
     turnRight() {
+        const bot = this.getActiveBot();
         this.setTaskState('TURNING');
-        this.bot.orientationIndex = (this.bot.orientationIndex + 1) % BOT_DIRECTIONS.length;
+        bot.orientationIndex = (bot.orientationIndex + 1) % BOT_DIRECTIONS.length;
         this.setTaskState('IDLE');
     }
 
     pickup() {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
-        if (this.worldObjects.get(key) === 'crate') {
-            this.inventory = 'full';
+        const bot = this.getActiveBot();
+        if (bot.inventory === 'empty' && this.worldObjects.get(key) === 'crate') {
+            bot.inventory = 'full';
             this.worldObjects.delete(key);
         }
     }
@@ -375,51 +552,69 @@ class BotController {
     dropoff() {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
-        if (this.deliveryZones.has(key) && this.inventory === 'full') {
-            this.inventory = 'empty';
+        const bot = this.getActiveBot();
+        if (this.deliveryZones.has(key) && bot.inventory === 'full') {
+            bot.inventory = 'empty';
             this.gold += 50;
             const goldEl = document.getElementById('ui-gold');
             if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
+            
+            this.worldObjects.set('3,5', 'crate');
         }
     }
 
     scan() {
+        const bot = this.getActiveBot();
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
-        this.lastScanResult = this.worldObjects.get(key) || 'empty';
-        return this.lastScanResult;
+        bot.lastScanResult = this.worldObjects.get(key) || 'empty';
+        return bot.lastScanResult;
     }
 
     update(now = performance.now()) {
-        if (this.taskState !== 'IDLE' || this.taskQueue.length === 0) return;
-        if (now - this.lastCommandAt < this.commandDelayMs) return;
-        
-        const nextTask = this.taskQueue[0];
-        this.lastCommandAt = now;
-
-        if (nextTask.type === 'COMMAND') {
-            this.taskQueue.shift();
-            this.executeCommand(nextTask.name);
-        } else if (nextTask.type === 'WHILE') {
-            const conditionMet = this.evaluateCondition(nextTask.condition);
-            if (conditionMet) {
-                this.taskQueue.shift();
-                this.taskQueue.unshift(...JSON.parse(JSON.stringify(nextTask.body)), nextTask);
-            } else {
-                this.taskQueue.shift();
+        this.bots.forEach(bot => {
+            if (bot.taskState === 'WAITING') {
+                if (now < (bot.waitCompleteAt || 0)) return;
+                bot.taskState = 'IDLE';
             }
-        } else if (nextTask.type === 'IF') {
-            const conditionMet = this.evaluateCondition(nextTask.condition);
-            this.taskQueue.shift();
-            const activeBranch = conditionMet ? nextTask.ifBody : nextTask.elseBody;
-            if (activeBranch && activeBranch.length > 0) {
-                this.taskQueue.unshift(...JSON.parse(JSON.stringify(activeBranch)));
-            }
-        }
 
-        if (this.taskQueue.length === 0 && this.taskState === 'IDLE') {
-            setRunButtonState(true);
-        }
+            if (bot.taskState !== 'IDLE' || bot.taskQueue.length === 0) return;
+            if (now - bot.lastCommandAt < this.commandDelayMs) return;
+            
+            const nextTask = bot.taskQueue[0];
+            bot.lastCommandAt = now;
+
+            const prevSelected = this.selectedBotId;
+            this.selectedBotId = bot.bot_id;
+
+            if (nextTask.type === 'COMMAND') {
+                bot.taskQueue.shift();
+                this.executeCommand(nextTask);
+            } else if (nextTask.type === 'WHILE') {
+                const conditionMet = this.evaluateCondition(nextTask.condition);
+                if (conditionMet) {
+                    bot.taskQueue.shift();
+                    bot.taskQueue.unshift(...JSON.parse(JSON.stringify(nextTask.body)), nextTask);
+                } else {
+                    bot.taskQueue.shift();
+                }
+            } else if (nextTask.type === 'IF') {
+                const conditionMet = this.evaluateCondition(nextTask.condition);
+                bot.taskQueue.shift();
+                const activeBranch = conditionMet ? nextTask.ifBody : nextTask.elseBody;
+                if (activeBranch && activeBranch.length > 0) {
+                    bot.taskQueue.unshift(...JSON.parse(JSON.stringify(activeBranch)));
+                }
+            }
+
+            this.selectedBotId = prevSelected;
+
+            if (bot.taskQueue.length === 0 && bot.taskState === 'IDLE') {
+                if (bot.bot_id === this.selectedBotId) {
+                    setRunButtonState(true);
+                }
+            }
+        });
     }
 }
 
@@ -525,29 +720,115 @@ function initBotVisualizer(controller, containerId) {
     zoneEl.style.border = '2px dashed #8cf272';
     container.appendChild(zoneEl);
 
-    const botElement = document.createElement('div');
-    botElement.style.position = 'absolute';
-    botElement.style.width = '32px';
-    botElement.style.height = '32px';
-    botElement.style.backgroundColor = '#ffd588';
-    botElement.style.border = '2px solid #412d00';
-    botElement.style.zIndex = '50';
-    botElement.style.display = 'flex';
-    botElement.style.alignItems = 'center';
-    botElement.style.justifyContent = 'center';
-    botElement.innerHTML = '<div style="width: 8px; height: 8px; background: #412d00;"></div>';
-    container.appendChild(botElement);
+    // --- FEATURE ADDITION: Floating Tooltip Layer for Hover Telemetry ---
+    const tooltipEl = document.createElement('div');
+    tooltipEl.id = 'bot-hover-tooltip';
+    tooltipEl.style.position = 'absolute';
+    tooltipEl.style.backgroundColor = '#1a1c18';
+    tooltipEl.style.color = '#e2e3dd';
+    tooltipEl.style.border = '2px solid #412d00';
+    tooltipEl.style.padding = '6px 10px';
+    tooltipEl.style.fontSize = '9px';
+    tooltipEl.style.fontFamily = 'JetBrains Mono, monospace';
+    tooltipEl.style.zIndex = '100';
+    tooltipEl.style.pointerEvents = 'none';
+    tooltipEl.style.display = 'none';
+    container.appendChild(tooltipEl);
+
+    const botElementsMap = new Map();
+    let hoveredBotId = null;
 
     function updateVisuals() {
-        const x = controller.bot.x * controller.gridSize;
-        const y = controller.bot.y * controller.gridSize;
-        botElement.style.left = x + 'px';
-        botElement.style.top = y + 'px';
+        const active = controller.getActiveBot();
 
-        if (controller.inventory === 'full') {
-            crateEl.style.display = 'none';
-        } else {
+        // --- FULL TELEMETRY PANEL PROP MAPPING ---
+        const telId = document.getElementById('telemetry-id');
+        const telPos = document.getElementById('telemetry-pos');
+        const telFacing = document.getElementById('telemetry-facing');
+        const telState = document.getElementById('telemetry-state');
+        const telInventory = document.getElementById('telemetry-inventory');
+        const telLastScan = document.getElementById('telemetry-last-scan');
+        const uiUnits = document.getElementById('ui-units');
+        const uiFleetList = document.getElementById('ui-fleet-list');
+
+        if (telId) telId.textContent = active.bot_id;
+        if (telPos) telPos.textContent = `(${active.x}, ${active.y})`;
+        if (telFacing) telFacing.textContent = BOT_DIRECTIONS[active.orientationIndex % BOT_DIRECTIONS.length].name.toUpperCase();
+        if (telState) telState.textContent = active.taskState;
+        if (telInventory) telInventory.textContent = active.inventory;
+        if (telLastScan) telLastScan.textContent = active.lastScanResult;
+
+        if (uiUnits) uiUnits.innerHTML = `${controller.bots.length} / 20 <span class="text-[10px]">BOTS</span>`;
+
+        if (uiFleetList) {
+            uiFleetList.innerHTML = controller.bots.map(b => `
+                <div class="flex justify-between items-center text-xs cursor-pointer hover:text-primary transition-colors" onclick="window.botController.selectBot('${b.bot_id}')">
+                    <span class="font-code-sm ${b.bot_id === controller.selectedBotId ? 'text-primary font-bold' : 'text-on-surface'}">${b.bot_id}</span>
+                    <span class="font-code-sm text-[10px] ${b.taskState !== 'IDLE' ? 'text-tertiary animate-pulse' : 'text-on-surface-variant'}">${b.taskState}</span>
+                </div>
+            `).join('');
+        }
+
+        // Render/Update individual bot elements & interactive click shortcuts
+        controller.bots.forEach(bot => {
+            let el = botElementsMap.get(bot.bot_id);
+            if (!el) {
+                el = document.createElement('div');
+                el.style.position = 'absolute';
+                el.style.width = '32px';
+                el.style.height = '32px';
+                el.style.backgroundColor = bot.bot_id === controller.selectedBotId ? '#ffd588' : '#fdbb25';
+                el.style.border = '2px solid #412d00';
+                el.style.zIndex = '50';
+                el.style.display = 'flex';
+                el.style.alignItems = 'center';
+                el.style.justifyContent = 'center';
+                el.style.cursor = 'pointer';
+                el.innerHTML = `<div style="width: 8px; height: 8px; background: #412d00;"></div>`;
+                
+                // --- FEATURE ADDITION: Click to Select Shortcut & Hover Telemetry ---
+                el.addEventListener('click', () => {
+                    controller.selectBot(bot.bot_id);
+                });
+                el.addEventListener('mouseenter', () => { hoveredBotId = bot.bot_id; tooltipEl.style.display = 'block'; });
+                el.addEventListener('mouseleave', () => { hoveredBotId = null; tooltipEl.style.display = 'none'; });
+                el.addEventListener('mousemove', (e) => {
+                    const rect = container.getBoundingClientRect();
+                    tooltipEl.style.left = (e.clientX - rect.left + 12) + 'px';
+                    tooltipEl.style.top = (e.clientY - rect.top - 28) + 'px';
+                });
+
+                container.appendChild(el);
+                botElementsMap.set(bot.bot_id, el);
+            }
+
+            el.style.backgroundColor = bot.bot_id === controller.selectedBotId ? '#ffd588' : '#fdbb25';
+            el.style.borderColor = bot.bot_id === controller.selectedBotId ? '#8cf272' : '#412d00';
+            el.style.left = (bot.x * controller.gridSize) + 'px';
+            el.style.top = (bot.y * controller.gridSize) + 'px';
+        });
+
+        // Update active hover tooltip info dynamically per frame if hovered
+        if (hoveredBotId) {
+            const targetBot = controller.bots.find(b => b.bot_id === hoveredBotId);
+            if (targetBot) {
+                const facingName = BOT_DIRECTIONS[targetBot.orientationIndex % BOT_DIRECTIONS.length].name.toUpperCase();
+                tooltipEl.innerHTML = `
+                    <strong>${targetBot.bot_id}</strong><br>
+                    POS: (${targetBot.x}, ${targetBot.y})<br>
+                    FACING: ${facingName}<br>
+                    STATE: <span style="color: ${targetBot.taskState !== 'IDLE' ? '#8cf272' : '#ffd588'}">${targetBot.taskState}</span><br>
+                    INV: ${targetBot.inventory}<br>
+                    SCAN: ${targetBot.lastScanResult}
+                `;
+            }
+        }
+
+        const isCratePresent = controller.worldObjects.has('3,5');
+        if (isCratePresent) {
             crateEl.style.display = 'flex';
+        } else {
+            crateEl.style.display = 'none';
         }
 
         requestAnimationFrame(updateVisuals);
