@@ -298,7 +298,7 @@ dropoff();</textarea>
 <div class="grid grid-cols-2 gap-2">
 <div class="pixel-border bg-surface-container p-2">
 <div class="text-[10px] text-on-surface-variant uppercase">Uptime</div>
-<div class="text-sm font-bold text-on-surface">0h 00m</div>
+<div class="text-sm font-bold text-on-surface" id="ui-uptime">0h 00m</div>
 </div>
 <div class="pixel-border bg-surface-container p-2">
 <div class="text-[10px] text-on-surface-variant uppercase">Errors</div>
@@ -349,7 +349,7 @@ dropoff();</textarea>
 <span class="font-label-caps text-label-caps text-on-surface-variant">© 2144 INDUSTRIAL_KINETICS_CORP</span>
 <div class="flex gap-4">
 <a class="font-code-sm text-code-sm text-on-surface-variant hover:text-primary transition-colors" href="#">HELP</a>
-<a class="font-code-sm text-code-sm text-on-surface-variant hover:text-primary transition-colors" href="#">ERR_LOGS</a>
+<a class="font-code-sm text-code-sm text-on-surface-variant hover:text-primary transition-colors" href="#" id="err-logs-link">ERR_LOGS</a>
 <a class="font-code-sm text-code-sm text-tertiary underline transition-colors" href="#">PATCH_NOTES</a>
 </div>
 <div class="flex items-center gap-2">
@@ -357,6 +357,19 @@ dropoff();</textarea>
 <div class="w-2 h-2 bg-tertiary rounded-full animate-pulse shadow-[0_0_5px_#8cf272]"></div>
 </div>
 </footer>
+
+<!-- EXECUTION_LOG VIEWER (opened via footer ERR_LOGS link) -->
+<div id="log-viewer-modal" class="hidden fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-8">
+<div class="pixel-border bg-surface-container-low w-full max-w-3xl max-h-[80vh] flex flex-col">
+<div class="flex items-center justify-between px-3 py-2 bg-surface-container-highest border-b-4 border-outline-variant">
+<span class="font-code-sm text-code-sm text-primary font-bold uppercase">EXECUTION_LOG</span>
+<button id="log-viewer-close" class="w-8 h-8 pixel-border bg-surface-container hover:bg-primary-container hover:text-on-primary-container transition-all flex items-center justify-center">
+<span class="material-symbols-outlined text-sm">close</span>
+</button>
+</div>
+<div id="log-viewer-body" class="flex-1 overflow-y-auto terminal-scroll p-3"></div>
+</div>
+</div>
 
 <script>
     function switchTab(tab) {
@@ -416,6 +429,8 @@ dropoff();</textarea>
     window.addEventListener('resize', updateEditorMetrics);
     updateEditorMetrics();
 </script>
+<script src="storage-manager.js"></script>
+<script src="analytics-service.js"></script>
 <script src="bot-controller.js"></script>
 </body>
 </html>

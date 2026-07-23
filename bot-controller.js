@@ -175,6 +175,43 @@ class AdvancedBotController {
         setRunButtonState(newActive.taskQueue.length === 0 && newActive.taskState === 'IDLE');
     }
 
+    // --- Persistence support (storage-manager.js): flushes whatever is
+    // currently typed in the editor into the active bot's memory (mirrors
+    // the same flush selectBot() does), then returns a saved_scripts-shaped
+    // snapshot of every bot's script for saving. ---
+    getScriptSnapshot() {
+        const active = this.getActiveBot();
+        const textarea = document.getElementById('code-textarea');
+        if (active && textarea) {
+            active.script = textarea.value;
+        }
+        return this.bots.map(b => ({
+            script_id: b.bot_id,
+            title: b.bot_id,
+            code: b.script
+        }));
+    }
+
+    // --- Persistence support (storage-manager.js): applies a saved_scripts
+    // snapshot back onto matching bots by bot_id, then refreshes the visible
+    // editor if it's showing the currently selected bot. ---
+    hydrateScripts(savedScripts) {
+        if (!Array.isArray(savedScripts)) return;
+        savedScripts.forEach(entry => {
+            const bot = this.bots.find(b => b.bot_id === entry.script_id);
+            if (bot && typeof entry.code === 'string') {
+                bot.script = entry.code;
+            }
+        });
+
+        const active = this.getActiveBot();
+        const textarea = document.getElementById('code-textarea');
+        if (active && textarea) {
+            textarea.value = active.script;
+            if (typeof updateEditorMetrics === 'function') updateEditorMetrics();
+        }
+    }
+
     getFacingVector() { 
         const bot = this.getActiveBot();
         return BOT_DIRECTIONS[bot.orientationIndex % BOT_DIRECTIONS.length]; 
@@ -1084,6 +1121,24 @@ function initBotVisualizer(controller, containerId) {
 }
 
 window.botController = new AdvancedBotController({ commandDelayMs: 400 });
+
+// --- Persistence: hydrates gold/warehouse level/unlocks from LocalStorage
+// and hooks dropoff()/upgradeWarehouse()/purchaseUpgrade()/purchaseNewBot()
+// to auto-save + sync with the backend. See storage-manager.js. ---
+if (window.PersistenceManager) {
+    window.gamePersistence = new window.PersistenceManager();
+    window.gamePersistence.attach(window.botController);
+}
+
+// --- Analytics: real-time throughput/uptime/error metrics + EXECUTION_LOG
+// tracking. Wires into the existing (previously dormant) UI hooks in
+// index.html: #ui-throughput, #ui-errors, #ui-uptime, #flow-graph-container,
+// and the ERR_LOGS footer link. See analytics-service.js. ---
+if (window.AnalyticsService) {
+    window.gameAnalytics = new window.AnalyticsService();
+    window.gameAnalytics.attach(window.botController);
+}
+
 initBotVisualizer(window.botController, 'VIEWPORT_ACTIVE');
 
 function gameLoop() {
