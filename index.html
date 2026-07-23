@@ -142,11 +142,6 @@
             background: #9d8f79;
         }
 
-        .token-keyword { color: #ffd588; font-weight: 700; }
-        .token-function { color: #8cf272; }
-        .token-comment { color: #9d8f79; font-style: italic; }
-        .token-string { color: #ffb4a6; }
-
         #code-editor-layer {
             display: none !important;
         }
@@ -229,18 +224,14 @@
 <div class="flex items-center gap-2">
 <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
 <select id="bot-selector" onchange="window.botController.selectBot(this.value)" class="bg-surface-container text-primary font-code-sm text-xs border border-outline-variant px-1 py-0.5 focus:outline-none">
-<!-- Dynamically populated options -->
 </select>
 </div>
 <span class="font-code-sm text-xs text-on-surface-variant">LOGIC_CORE</span>
 </div>
 <div class="flex-1 relative bg-surface-container-lowest pixel-border overflow-hidden flex font-code-sm group">
 <div class="scanline"></div>
-<!-- Static Line Numbers Column using requestAnimationFrame transform synchronization -->
 <div class="w-10 bg-surface-container text-outline-variant text-right pr-2 select-none border-r border-outline-variant overflow-hidden relative" id="code-line-gutter">
-<div class="absolute top-0 left-0 w-full pt-[8px] leading-5 font-code-sm text-code-sm" id="code-line-numbers">
-                1
-            </div>
+<div class="absolute top-0 left-0 w-full pt-[8px] leading-5 font-code-sm text-code-sm" id="code-line-numbers">1</div>
 </div>
 <div class="relative flex-1 overflow-auto terminal-scroll" id="code-scroll-container">
 <div class="absolute inset-0 text-transparent leading-5 pointer-events-none" id="code-editor-layer"></div>
@@ -264,9 +255,9 @@ dropoff();</textarea>
 
 <!-- CENTER PANEL: VIEWPORT -->
 <section class="relative industrial-grid flex items-center justify-center overflow-auto p-4">
-<div class="w-[512px] h-[512px] min-w-[512px] min-h-[512px] pixel-border bg-surface-container-lowest relative overflow-hidden" id="VIEWPORT_ACTIVE">
+<div class="pixel-border bg-surface-container-lowest relative overflow-hidden" id="VIEWPORT_ACTIVE">
 <div class="absolute top-4 left-4 flex gap-2 z-20">
-<div class="px-2 py-1 bg-surface-container text-[10px] text-tertiary font-bold border border-tertiary/30 uppercase">Grid_32x32_Active</div>
+<div class="px-2 py-1 bg-surface-container text-[10px] text-tertiary font-bold border border-tertiary/30 uppercase">Grid_Dynamic_Active</div>
 <div class="px-2 py-1 bg-surface-container text-[10px] text-on-surface-variant border border-outline-variant uppercase">Fleet_Active</div>
 </div>
 <div class="absolute inset-0 industrial-grid opacity-40 pointer-events-none z-10"></div>
@@ -282,7 +273,6 @@ dropoff();</textarea>
 </div>
 <div class="flex-1 flex flex-col gap-4 overflow-y-auto terminal-scroll pr-1">
 <div class="flex flex-col gap-4" id="content-stats">
-<!-- ACTIVE BOT PROPERTIES / TELEMETRY CARD -->
 <div class="p-3 bg-surface-container-high pixel-border border-l-primary border-l-4">
 <span class="text-label-caps text-on-surface-variant block mb-2">SELECTED_BOT_TELEMETRY</span>
 <div class="space-y-1 font-code-sm text-xs text-on-surface">
@@ -290,6 +280,8 @@ dropoff();</textarea>
 <div class="flex justify-between"><span>POS:</span><span id="telemetry-pos" class="text-tertiary">--</span></div>
 <div class="flex justify-between"><span>FACING:</span><span id="telemetry-facing" class="text-on-surface-variant">--</span></div>
 <div class="flex justify-between"><span>STATE:</span><span id="telemetry-state" class="text-primary-container">--</span></div>
+<div class="flex justify-between"><span>INV:</span><span id="telemetry-inventory" class="text-secondary">--</span></div>
+<div class="flex justify-between"><span>LAST_SCAN:</span><span id="telemetry-last-scan" class="text-tertiary">--</span></div>
 </div>
 </div>
 <div class="p-3 bg-surface-container-high pixel-border">
@@ -301,9 +293,7 @@ dropoff();</textarea>
 </div>
 <div class="p-3 bg-surface-container-high pixel-border">
 <span class="text-label-caps text-on-surface-variant block mb-2">ACTIVE_UNITS_FLEET</span>
-<div class="space-y-3" id="ui-fleet-list">
-<div class="flex justify-between items-center"><span class="font-code-sm text-xs">MK-1_ROLLER_01</span><span class="font-code-sm text-xs text-primary">ACTIVE</span></div>
-</div>
+<div class="space-y-3" id="ui-fleet-list"></div>
 </div>
 <div class="grid grid-cols-2 gap-2">
 <div class="pixel-border bg-surface-container p-2">
@@ -327,7 +317,12 @@ dropoff();</textarea>
 <div class="p-3 pixel-border bg-surface-container-high border-l-primary border-l-8">
 <div class="flex justify-between items-start mb-2"><div class="text-sm font-bold text-primary">FASTER_CPU</div><div class="text-xs bg-primary-container px-1 text-on-primary-container">450 AU</div></div>
 <p class="text-[10px] text-on-surface-variant mb-3 leading-tight">Increases script execution speed by 15%.</p>
-<button class="w-full py-1 bg-primary text-on-primary text-[10px] font-bold pixel-border uppercase">Apply Upgrade</button>
+<button onclick="window.botController.purchaseUpgrade('faster_cpu', 450)" class="w-full py-1 bg-primary text-on-primary text-[10px] font-bold pixel-border uppercase">Apply Upgrade</button>
+</div>
+<div class="p-3 pixel-border bg-surface-container-high border-l-tertiary border-l-8">
+<div class="flex justify-between items-start mb-2"><div class="text-sm font-bold text-tertiary">CARGO_BOT_MK2</div><div class="text-xs bg-primary-container px-1 text-on-primary-container">300 AU</div></div>
+<p class="text-[10px] text-on-surface-variant mb-3 leading-tight">Purchase an additional autonomous fleet unit.</p>
+<button onclick="window.botController.purchaseNewBot(300)" class="w-full py-1 bg-tertiary text-on-tertiary text-[10px] font-bold pixel-border uppercase">Unlock Unit</button>
 </div>
 </div>
 <div class="pixel-border bg-surface-container-high overflow-hidden min-h-[160px] relative mt-2">
@@ -390,8 +385,6 @@ dropoff();</textarea>
 
     function updateEditorMetrics() {
         const code = codeArea.value;
-
-        // Dynamically compute lines and generate number markers matching 20px line height precisely
         const lineCount = code.split('\n').length;
         let numbersHTML = '';
         for (let i = 1; i <= lineCount; i++) {
@@ -399,18 +392,15 @@ dropoff();</textarea>
         }
         lineNumbers.innerHTML = numbersHTML;
 
-        // Auto-expand textarea height matching content block to allow full vertical scrolling bounds
         codeArea.style.height = '0px';
         const scrollH = codeArea.scrollHeight;
         codeArea.style.height = Math.max(scrollH, scrollContainer.clientHeight) + 'px';
 
-        // Sync text width bounds for horizontal scrolling if lines go wide
         const maxLineLength = Math.max(...code.split('\n').map(l => l.length), 20);
         const dynamicWidth = Math.max(maxLineLength * 8 + 40, scrollContainer.clientWidth);
         codeArea.style.width = dynamicWidth + 'px';
     }
 
-    // High-performance requestAnimationFrame scroll lock preventing any visual drift or scatter
     let ticking = false;
     scrollContainer.addEventListener('scroll', () => {
         if (!ticking) {
@@ -424,11 +414,8 @@ dropoff();</textarea>
 
     codeArea.addEventListener('input', updateEditorMetrics);
     window.addEventListener('resize', updateEditorMetrics);
-    
-    // Initial setup call
     updateEditorMetrics();
 </script>
-<!-- LINKED BOT CONTROLLER SCRIPT -->
 <script src="bot-controller.js"></script>
 </body>
 </html>

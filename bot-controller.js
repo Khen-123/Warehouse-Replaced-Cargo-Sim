@@ -1,4 +1,6 @@
-// --- CONSTANTS: The Core Logic Rules ---
+// bot-controller.js
+// AUTOMATA_CORE_V5 - Warehouse Level Upgrades & Automated Decision Gateways
+
 const BOT_DIRECTIONS = [
     { name: 'right', x: 1, y: 0 },
     { name: 'down', x: 0, y: 1 },
@@ -17,6 +19,26 @@ const BOT_COMMAND_LIBRARY = Object.freeze({
     dropoff: 'dropoff',
     scan: 'scan',
     isBlocked: 'isBlocked',
+});
+
+// --- CRATE SCHEMA CLASSIFICATION & COLOR CODING ---
+const CRATE_TYPES = Object.freeze({
+    standard: { id: 'standard', name: 'Standard (Small)', value: 50, color: '#f4b41b', zone: 'Peripheral-North' },
+    medium: { id: 'medium', name: 'Medium Batch', value: 120, color: '#fdbb25', zone: 'Hub-Node-A' },
+    large: { id: 'large', name: 'Large Priority', value: 250, color: '#ffb4a6', zone: 'Secure-Central-Terminal' }
+});
+
+// --- WAREHOUSE LEVEL TIERS (WAREHOUSE_LEVEL_FK) ---
+const WAREHOUSE_LEVELS = Object.freeze({
+    1: { level: 1, name: 'Standard Depot', width: 16, height: 16, cost: 0 },
+    2: { level: 2, name: 'Expanded Terminal', width: 24, height: 24, cost: 500 },
+    3: { level: 3, name: 'Megastructure Matrix', width: 32, height: 32, cost: 1200 }
+});
+
+const SENSOR_MODES = Object.freeze({
+    basic: 'basic',
+    advanced: 'advanced',
+    spectral: 'spectral'
 });
 
 function getLevenshteinDistance(a, b) {
@@ -45,17 +67,22 @@ function getLevenshteinDistance(a, b) {
     return matrix[b.length][a.length];
 }
 
-class BotController {
+class AdvancedBotController {
     constructor(options = {}) {
-        this.gridWidth = options.gridWidth || 16;
-        this.gridHeight = options.gridHeight || 16;
+        this.warehouseLevel = options.warehouseLevel || 1;
+        const initialConfig = WAREHOUSE_LEVELS[this.warehouseLevel] || WAREHOUSE_LEVELS[1];
+
+        this.gridWidth = options.gridWidth || initialConfig.width;
+        this.gridHeight = options.gridHeight || initialConfig.height;
         this.gridSize = options.gridSize || 32;
 
-        this.worldObjects = new Map(options.worldObjects || [['3,5', 'crate']]);
+        this.worldObjects = new Map(options.worldObjects || []);
+        this.crateMetadata = new Map(options.crateMetadata || []);
+        this.initCargoClasses();
+
         this.deliveryZones = new Set(options.deliveryZones || ['7,5']);
         this.collisionObjects = new Set(options.collisionObjects || []);
 
-        // Multi-Bot Fleet Initialization (Aligning with WAREHOUSE_LEVELS & BOT Schema)
         this.bots = options.bots || [
             {
                 bot_id: 'MK-1_ROLLER_01',
@@ -64,9 +91,9 @@ class BotController {
                 orientationIndex: 0,
                 taskQueue: [],
                 taskState: 'IDLE',
-                inventory: 'empty',
+                inventory: { capacity: 2, slots: [], batchType: null },
                 lastScanResult: 'empty',
-                script: `// CONTINUOUS HARVEST LOOP\nwhile (inventory == 'empty') {\n    scan();\n    if (scan() == 'crate') {\n        pickup();\n    } else {\n        move();\n    }\n}\nstrafeRight(5);\ndropoff();`,
+                script: `// REPEAT LOOP HARVEST TEST\nrepeat(4) {\n    move();\n}\n`,
                 lastCommandAt: 0
             },
             {
@@ -76,7 +103,7 @@ class BotController {
                 orientationIndex: 0,
                 taskQueue: [],
                 taskState: 'IDLE',
-                inventory: 'empty',
+                inventory: { capacity: 2, slots: [], batchType: null },
                 lastScanResult: 'empty',
                 script: `// SECONDARY BOT SCRIPT\nmove();\nturnRight();\nmove();`,
                 lastCommandAt: 0
@@ -86,8 +113,26 @@ class BotController {
         this.selectedBotId = this.bots[0].bot_id;
         this.gold = options.gold || 0;
         this.commandDelayMs = options.commandDelayMs || 400;
+        this.sensorMode = options.sensorMode || SENSOR_MODES.basic;
+        this.activeUpgrades = new Set(options.activeUpgrades || []);
 
         this.initSelectorUI();
+    }
+
+    initCargoClasses() {
+        if (this.worldObjects.size === 0) {
+            const initialCargo = [
+                { id: 'SM-01', tier: 'standard', x: 2, y: 1 },
+                { id: 'MD-01', tier: 'medium', x: 7, y: 7 },
+                { id: 'LG-01', tier: 'large', x: 12, y: 10 }
+            ];
+
+            initialCargo.forEach(cargo => {
+                const key = `${cargo.x},${cargo.y}`;
+                this.worldObjects.set(key, 'crate');
+                this.crateMetadata.set(key, { ...CRATE_TYPES[cargo.tier], code: cargo.id, x: cargo.x, y: cargo.y });
+            });
+        }
     }
 
     getActiveBot() {
@@ -108,7 +153,6 @@ class BotController {
     }
 
     selectBot(botId) {
-        // Save current textarea content to active bot script buffer before switching
         const active = this.getActiveBot();
         const textarea = document.getElementById('code-textarea');
         if (active && textarea) {
@@ -123,7 +167,6 @@ class BotController {
         }
         clearErrorHighlights();
 
-        // Sync dropdown selector element UI state if out of sync
         const selector = document.getElementById('bot-selector');
         if (selector && selector.value !== botId) {
             selector.value = botId;
@@ -184,16 +227,16 @@ class BotController {
             if (parts.length === 2) {
                 const targetState = parts[1].trim().replace(/['"]/g, '');
                 const isNotEqual = clean.includes('!=');
-                const matches = bot.inventory === targetState;
-                return isNotEqual ? !matches : matches;
+                const inventoryMatch = bot.inventory.batchType === targetState || (bot.inventory.slots.length === 0 && targetState === 'empty');
+                return isNotEqual ? !inventoryMatch : inventoryMatch;
             }
         }
 
         const cleanNoSpaces = clean.replace(/\s+/g, '');
-        if (cleanNoSpaces === 'isBlocked()==false' || cleanNoSpaces === '!isBlocked()' || cleanNoSpaces === 'isBlocked()==1' === false) {
+        if (cleanNoSpaces === 'isBlocked()==false' || cleanNoSpaces === '!isBlocked()') {
             return !this.isBlocked();
         }
-        if (cleanNoSpaces === 'isBlocked()==true' || cleanNoSpaces === 'isBlocked()' || cleanNoSpaces === 'isBlocked()==1') {
+        if (cleanNoSpaces === 'isBlocked()==true' || cleanNoSpaces === 'isBlocked()') {
             return this.isBlocked();
         }
         if (cleanNoSpaces.startsWith('scan()')) {
@@ -210,12 +253,22 @@ class BotController {
         const lines = scriptString.split('\n');
         const validCommands = Object.keys(BOT_COMMAND_LIBRARY);
         const collectedErrors = [];
-
         const tokens = [];
+
+        let totalBraceBalance = 0;
+        let lastTokenLineNum = 1;
+
         lines.forEach((rawLine, idx) => {
             const lineNum = idx + 1;
             let trimmed = rawLine.trim();
             if (!trimmed || trimmed.startsWith('//')) return;
+
+            lastTokenLineNum = lineNum;
+
+            for (let i = 0; i < trimmed.length; i++) {
+                if (trimmed[i] === '{') totalBraceBalance++;
+                if (trimmed[i] === '}') totalBraceBalance--;
+            }
 
             if (trimmed.includes('} else')) {
                 const parts = trimmed.split('} else');
@@ -237,11 +290,25 @@ class BotController {
             tokens.push({ lineNum, text: trimmed, raw: rawLine });
         });
 
-        let tokenIndex = 0;
+        if (totalBraceBalance > 0) {
+            collectedErrors.push({
+                lineNum: lastTokenLineNum,
+                lineText: lines[lastTokenLineNum - 1] || '}',
+                message: `SyntaxError: Missing closing bracket '}' to match open scope`,
+                suggestion: `Add '}' to close block`
+            });
+        } else if (totalBraceBalance < 0) {
+            collectedErrors.push({
+                lineNum: lastTokenLineNum,
+                lineText: lines[lastTokenLineNum - 1] || '}',
+                message: `SyntaxError: Unexpected extra closing bracket '}'`,
+                suggestion: `Remove extraneous '}'`
+            });
+        }
 
+        let tokenIndex = 0;
         const parseBlock = (isTopLevel = false) => {
             const instructions = [];
-
             while (tokenIndex < tokens.length) {
                 const token = tokens[tokenIndex];
                 const trimmed = token.text;
@@ -253,34 +320,12 @@ class BotController {
                     return instructions;
                 }
 
-                if (trimmed.startsWith('REPEAT') || trimmed.startsWith('repeat')) {
-                    const match = trimmed.match(/^(?:REPEAT|repeat)\s*\(\s*(\d+)\s*\)\s*(\{)?/);
-                    if (!match) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid REPEAT syntax`, suggestion: `REPEAT (3) {` });
-                        tokenIndex++;
-                        continue;
-                    }
-                    if (!trimmed.includes('{')) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `REPEAT (${match[1]}) {` });
-                    }
-                    const repeatCount = parseInt(match[1], 10);
-                    tokenIndex++;
-                    const blockBody = parseBlock(false);
-                    for (let i = 0; i < repeatCount; i++) {
-                        blockBody.forEach(cmd => instructions.push(JSON.parse(JSON.stringify(cmd))));
-                    }
-                    continue;
-                }
-
-                if (trimmed.startsWith('while')) {
-                    const match = trimmed.match(/^while\s*\((.*?)\)\s*(\{)?/);
+                if (trimmed.toLowerCase().startsWith('while')) {
+                    const match = trimmed.match(/^while\s*\((.*?)\)\s*(\{)?/i);
                     if (!match) {
                         collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid while loop syntax`, suggestion: `while (condition) {` });
                         tokenIndex++;
                         continue;
-                    }
-                    if (!trimmed.includes('{')) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `while (${match[1]}) {` });
                     }
                     const condition = match[1].trim();
                     tokenIndex++;
@@ -288,39 +333,25 @@ class BotController {
                     continue;
                 }
 
-                if (trimmed.startsWith('for')) {
-                    const match = trimmed.match(/^for\s*\((.*?)\)\s*(\{)?/);
+                if (trimmed.toLowerCase().startsWith('repeat')) {
+                    const match = trimmed.match(/^repeat\s*\((.*?)\)\s*(\{)?/i);
                     if (!match) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid for loop syntax`, suggestion: `for (let i = 0; i < 3; i++) {` });
+                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid repeat loop syntax`, suggestion: `repeat(N) {` });
                         tokenIndex++;
                         continue;
                     }
-                    if (!trimmed.includes('{')) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `${trimmed} {` });
-                    }
-                    const headerParts = match[1].split(';');
-                    let limit = 1;
-                    if (headerParts.length >= 2) {
-                        const numMatch = headerParts[1].match(/<\s*(\d+)/);
-                        if (numMatch) limit = parseInt(numMatch[1], 10);
-                    }
+                    const countArg = match[1].trim();
                     tokenIndex++;
-                    const body = parseBlock(false);
-                    for (let step = 0; step < limit; step++) {
-                        body.forEach(cmd => instructions.push(JSON.parse(JSON.stringify(cmd))));
-                    }
+                    instructions.push({ type: 'REPEAT', count: countArg, body: parseBlock(false) });
                     continue;
                 }
 
-                if (trimmed.startsWith('if')) {
-                    const match = trimmed.match(/^if\s*\((.*?)\)\s*(\{)?/);
+                if (trimmed.toLowerCase().startsWith('if')) {
+                    const match = trimmed.match(/^if\s*\((.*?)\)\s*(\{)?/i);
                     if (!match) {
                         collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Invalid if statement syntax`, suggestion: `if (condition) {` });
                         tokenIndex++;
                         continue;
-                    }
-                    if (!trimmed.includes('{')) {
-                        collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Missing opening bracket '{'`, suggestion: `if (${match[1]}) {` });
                     }
                     const condition = match[1].trim();
                     tokenIndex++;
@@ -329,15 +360,13 @@ class BotController {
                     let elseBody = [];
                     if (tokenIndex < tokens.length) {
                         let nextToken = tokens[tokenIndex];
-                        if (nextToken.text.startsWith('else')) {
+                        if (nextToken.text.toLowerCase().startsWith('else')) {
                             tokenIndex++; 
                             if (tokenIndex < tokens.length && tokens[tokenIndex].text === '{') {
                                 tokenIndex++; 
                                 elseBody = parseBlock(false);
-                            } else if (nextToken.text.includes('{')) {
-                                elseBody = parseBlock(false);
                             } else {
-                                collectedErrors.push({ lineNum: nextToken.lineNum, lineText: nextToken.raw, message: `In line ${nextToken.lineNum}: Missing opening bracket '{' after else`, suggestion: `else {` });
+                                elseBody = parseBlock(false);
                             }
                         }
                     }
@@ -345,24 +374,20 @@ class BotController {
                     continue;
                 }
 
-                if (trimmed.startsWith('else')) {
-                    collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Orphaned 'else' statement`, suggestion: `Attach to an 'if' block` });
-                    tokenIndex++;
-                    continue;
-                }
-
                 let cleanContent = trimmed.split('//')[0].trim();
                 if (cleanContent.endsWith('{')) cleanContent = cleanContent.slice(0, -1).trim();
-
                 if (!cleanContent) { tokenIndex++; continue; }
 
-                if (!cleanContent.endsWith(';')) {
+                const isBlockHeader = /^(while|if|repeat|else)\b/i.test(cleanContent);
+                if (!cleanContent.endsWith(';') && !cleanContent.endsWith('}') && !isBlockHeader) {
                     collectedErrors.push({ lineNum, lineText: token.raw, message: `In line ${lineNum}: Expected ';' at end of statement`, suggestion: `${cleanContent};` });
                     tokenIndex++;
                     continue;
                 }
 
-                const stmtBody = cleanContent.slice(0, -1).trim();
+                const stmtBody = cleanContent.endsWith(';') ? cleanContent.slice(0, -1).trim() : cleanContent;
+                if (!stmtBody) { tokenIndex++; continue; }
+
                 const match = stmtBody.match(/^([a-zA-Z_]\w*)\s*\((.*?)\)$/);
 
                 if (!match) {
@@ -397,21 +422,12 @@ class BotController {
                     }
                 } else if (commandName === 'wait' && paramArg !== '') {
                     const seconds = parseFloat(paramArg);
-                    if (!isNaN(seconds) && seconds > 0) {
-                        instructions.push({ type: 'COMMAND', name: 'wait', duration: seconds * 1000 });
-                    } else {
-                        instructions.push({ type: 'COMMAND', name: 'wait', duration: 1000 });
-                    }
+                    instructions.push({ type: 'COMMAND', name: 'wait', duration: (!isNaN(seconds) ? seconds * 1000 : 1000) });
                 } else {
                     instructions.push({ type: 'COMMAND', name: commandName });
                 }
                 tokenIndex++;
             }
-
-            if (!isTopLevel) {
-                collectedErrors.push({ lineNum: lines.length, lineText: lines[lines.length - 1] || '', message: `Block closure error: Missing closing bracket '}'`, suggestion: `Add '}'` });
-            }
-
             return instructions;
         };
 
@@ -543,9 +559,30 @@ class BotController {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
         const bot = this.getActiveBot();
-        if (bot.inventory === 'empty' && this.worldObjects.get(key) === 'crate') {
-            bot.inventory = 'full';
+
+        if (!bot.inventory || !Array.isArray(bot.inventory.slots)) {
+            bot.inventory = { capacity: 2, slots: [], batchType: null };
+        }
+
+        if (this.worldObjects.get(key) === 'crate') {
+            const crateMeta = this.crateMetadata.get(key) || CRATE_TYPES.standard;
+
+            if (bot.inventory.slots.length >= bot.inventory.capacity) {
+                this.displayError('ERR: Inventory slot capacity reached');
+                return;
+            }
+
+            if (bot.inventory.slots.length > 0 && bot.inventory.batchType !== crateMeta.id) {
+                this.displayError(`ERR: Cannot mix cargo tiers (${bot.inventory.batchType} vs ${crateMeta.id})`);
+                return;
+            }
+
+            bot.inventory.slots.push(crateMeta);
+            bot.inventory.batchType = crateMeta.id;
+
             this.worldObjects.delete(key);
+            this.crateMetadata.delete(key);
+            this.displayError(`SUCCESS: Picked up ${crateMeta.name} [Slot ${bot.inventory.slots.length}/${bot.inventory.capacity}]`);
         }
     }
 
@@ -553,13 +590,50 @@ class BotController {
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
         const bot = this.getActiveBot();
-        if (this.deliveryZones.has(key) && bot.inventory === 'full') {
-            bot.inventory = 'empty';
-            this.gold += 50;
+
+        if (!bot.inventory || !Array.isArray(bot.inventory.slots)) {
+            bot.inventory = { capacity: 2, slots: [], batchType: null };
+        }
+
+        if (this.deliveryZones.has(key) && bot.inventory.slots.length > 0) {
+            const batchTier = bot.inventory.batchType;
+            const currentSlots = bot.inventory.slots.length;
+
+            if (batchTier === 'medium' && currentSlots < 2) {
+                this.displayError(`ERR: Medium batch requires 2 consecutive crates (have ${currentSlots}/2)`);
+                return;
+            }
+
+            if (batchTier === 'large' && currentSlots < 1) {
+                this.displayError(`ERR: Large priority shipment validation failed`);
+                return;
+            }
+
+            let totalBatchValue = 0;
+            bot.inventory.slots.forEach(crate => {
+                totalBatchValue += crate.value;
+            });
+
+            if (batchTier === 'medium') totalBatchValue = Math.round(totalBatchValue * 1.25);
+            if (batchTier === 'large') totalBatchValue = Math.round(totalBatchValue * 1.50);
+
+            bot.inventory.slots = [];
+            bot.inventory.batchType = null;
+            
+            this.gold += totalBatchValue;
             const goldEl = document.getElementById('ui-gold');
             if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
+
+            this.displayError(`SUCCESS: Delivered sequence! Earned ${totalBatchValue} AU`);
             
             this.worldObjects.set('3,5', 'crate');
+            this.crateMetadata.set('3,5', { ...CRATE_TYPES.standard, code: 'SM-RESPAWN', x: 3, y: 5 });
+
+            // --- AUTOMATED MILESTONE DECISION GATE CHECK ---
+            const nextConfig = WAREHOUSE_LEVELS[this.warehouseLevel + 1];
+            if (nextConfig && this.gold >= nextConfig.cost) {
+                this.displayError(`MILESTONE: Ready to unlock ${nextConfig.name}! Check upgrade panel.`);
+            }
         }
     }
 
@@ -567,12 +641,116 @@ class BotController {
         const bot = this.getActiveBot();
         const front = this.getFrontTile();
         const key = this.toTileKey(front.x, front.y);
-        bot.lastScanResult = this.worldObjects.get(key) || 'empty';
+        const obj = this.worldObjects.get(key);
+
+        if (!obj) {
+            bot.lastScanResult = 'empty';
+            return 'empty';
+        }
+
+        if (obj === 'crate') {
+            const crateMeta = this.crateMetadata.get(key) || CRATE_TYPES.standard;
+            if (this.sensorMode === SENSOR_MODES.advanced || this.activeUpgrades.has('spectral_scanner')) {
+                bot.lastScanResult = `${crateMeta.id}:${crateMeta.value}AU`;
+            } else {
+                bot.lastScanResult = 'crate';
+            }
+        } else {
+            bot.lastScanResult = obj;
+        }
+
         return bot.lastScanResult;
+    }
+
+    inspectCrate() {
+        const front = this.getFrontTile();
+        const key = this.toTileKey(front.x, front.y);
+        if (this.worldObjects.get(key) === 'crate') {
+            return this.crateMetadata.get(key) || CRATE_TYPES.standard;
+        }
+        return null;
+    }
+
+    purchaseNewBot(cost = 300) {
+        if (this.gold >= cost && this.bots.length < 20) {
+            this.gold -= cost;
+            const goldEl = document.getElementById('ui-gold');
+            if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
+
+            const newId = `MK-1_ROLLER_${String(this.bots.length + 1).padStart(2, '0')}`;
+            this.bots.push({
+                bot_id: newId,
+                x: 2,
+                y: 4,
+                orientationIndex: 0,
+                taskQueue: [],
+                taskState: 'IDLE',
+                inventory: { capacity: 2, slots: [], batchType: null },
+                lastScanResult: 'empty',
+                script: `// EXPANDED FLEET UNIT SCRIPT\nmove();\ndropoff();`,
+                lastCommandAt: 0
+            });
+            this.initSelectorUI();
+            this.displayError(`SUCCESS: Purchased new unit ${newId}`);
+        } else {
+            this.displayError(`ERR: Insufficient AU or Fleet Capacity Full`);
+        }
+    }
+
+    purchaseUpgrade(upgradeId, cost) {
+        if (this.gold >= cost) {
+            this.gold -= cost;
+            const goldEl = document.getElementById('ui-gold');
+            if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
+            
+            this.activeUpgrades.add(upgradeId);
+            if (upgradeId === 'faster_cpu') {
+                this.commandDelayMs = Math.max(100, this.commandDelayMs * 0.85);
+            } else if (upgradeId === 'spectral_scanner') {
+                this.sensorMode = SENSOR_MODES.advanced;
+            }
+
+            this.displayError(`SUCCESS: Unlocked upgrade [${upgradeId.toUpperCase()}]`);
+        } else {
+            this.displayError(`ERR: Insufficient AU for upgrade`);
+        }
+    }
+
+    // --- DYNAMIC WAREHOUSE LEVEL EXPANSION (warehouse_level_FK) ---
+    upgradeWarehouse() {
+        const nextLevelNum = this.warehouseLevel + 1;
+        const nextConfig = WAREHOUSE_LEVELS[nextLevelNum];
+
+        if (!nextConfig) {
+            this.displayError('ERR: Maximum warehouse level reached');
+            return;
+        }
+
+        if (this.gold >= nextConfig.cost) {
+            this.gold -= nextConfig.cost;
+            this.warehouseLevel = nextLevelNum;
+            this.gridWidth = nextConfig.width;
+            this.gridHeight = nextConfig.height;
+
+            const goldEl = document.getElementById('ui-gold');
+            if (goldEl) goldEl.innerHTML = `${this.gold} <span class="text-[10px]">AU</span>`;
+
+            if (typeof resizeBotVisualizer === 'function') {
+                resizeBotVisualizer(this, 'VIEWPORT_ACTIVE');
+            }
+
+            this.displayError(`SUCCESS: Upgraded to ${nextConfig.name} (${nextConfig.width}x${nextConfig.height})`);
+        } else {
+            this.displayError(`ERR: Insufficient AU for warehouse upgrade (Needs ${nextConfig.cost} AU)`);
+        }
     }
 
     update(now = performance.now()) {
         this.bots.forEach(bot => {
+            if (!bot.inventory || !Array.isArray(bot.inventory.slots)) {
+                bot.inventory = { capacity: 2, slots: [], batchType: null };
+            }
+
             if (bot.taskState === 'WAITING') {
                 if (now < (bot.waitCompleteAt || 0)) return;
                 bot.taskState = 'IDLE';
@@ -595,6 +773,25 @@ class BotController {
                 if (conditionMet) {
                     bot.taskQueue.shift();
                     bot.taskQueue.unshift(...JSON.parse(JSON.stringify(nextTask.body)), nextTask);
+                } else {
+                    bot.taskQueue.shift();
+                }
+            } else if (nextTask.type === 'REPEAT') {
+                let remainingCount = nextTask._remainingCount;
+                if (remainingCount === undefined) {
+                    remainingCount = parseInt(nextTask.count, 10);
+                    if (isNaN(remainingCount)) remainingCount = 1;
+                }
+
+                if (remainingCount > 0) {
+                    if (nextTask._remainingCount === undefined) {
+                        nextTask._remainingCount = remainingCount - 1;
+                    } else {
+                        nextTask._remainingCount--;
+                    }
+                    bot.taskQueue.shift();
+                    const loopClone = JSON.parse(JSON.stringify(nextTask));
+                    bot.taskQueue.unshift(...JSON.parse(JSON.stringify(nextTask.body)), loopClone);
                 } else {
                     bot.taskQueue.shift();
                 }
@@ -692,35 +889,36 @@ function clearErrorHighlights() {
     if (banner) banner.remove();
 }
 
+function resizeBotVisualizer(controller, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const totalWidth = controller.gridWidth * controller.gridSize;
+    const totalHeight = controller.gridHeight * controller.gridSize;
+    container.style.width = totalWidth + 'px';
+    container.style.height = totalHeight + 'px';
+    container.style.minWidth = totalWidth + 'px';
+    container.style.minHeight = totalHeight + 'px';
+}
+
 function initBotVisualizer(controller, containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
 
-    const crateEl = document.createElement('div');
-    crateEl.style.position = 'absolute';
-    crateEl.style.width = '32px';
-    crateEl.style.height = '32px';
-    crateEl.style.backgroundColor = '#f4b41b';
-    crateEl.style.left = (3 * 32) + 'px';
-    crateEl.style.top = (5 * 32) + 'px';
-    crateEl.style.border = '2px solid #ffd588';
-    crateEl.style.display = 'flex';
-    crateEl.style.alignItems = 'center';
-    crateEl.style.justifyContent = 'center';
-    crateEl.innerHTML = '<span class="material-symbols-outlined text-xs text-on-primary">box</span>';
-    container.appendChild(crateEl);
+    resizeBotVisualizer(controller, containerId);
+
+    const dynamicCargoElements = new Map();
 
     const zoneEl = document.createElement('div');
     zoneEl.style.position = 'absolute';
-    zoneEl.style.width = '32px';
-    zoneEl.style.height = '32px';
+    zoneEl.style.width = controller.gridSize + 'px';
+    zoneEl.style.height = controller.gridSize + 'px';
     zoneEl.style.backgroundColor = 'rgba(140, 242, 114, 0.2)';
-    zoneEl.style.left = (7 * 32) + 'px';
-    zoneEl.style.top = (5 * 32) + 'px';
+    zoneEl.style.left = (7 * controller.gridSize) + 'px';
+    zoneEl.style.top = (5 * controller.gridSize) + 'px';
     zoneEl.style.border = '2px dashed #8cf272';
     container.appendChild(zoneEl);
 
-    // --- FEATURE ADDITION: Floating Tooltip Layer for Hover Telemetry ---
     const tooltipEl = document.createElement('div');
     tooltipEl.id = 'bot-hover-tooltip';
     tooltipEl.style.position = 'absolute';
@@ -737,11 +935,11 @@ function initBotVisualizer(controller, containerId) {
 
     const botElementsMap = new Map();
     let hoveredBotId = null;
+    let hoveredCargoKey = null;
 
     function updateVisuals() {
         const active = controller.getActiveBot();
 
-        // --- FULL TELEMETRY PANEL PROP MAPPING ---
         const telId = document.getElementById('telemetry-id');
         const telPos = document.getElementById('telemetry-pos');
         const telFacing = document.getElementById('telemetry-facing');
@@ -755,7 +953,10 @@ function initBotVisualizer(controller, containerId) {
         if (telPos) telPos.textContent = `(${active.x}, ${active.y})`;
         if (telFacing) telFacing.textContent = BOT_DIRECTIONS[active.orientationIndex % BOT_DIRECTIONS.length].name.toUpperCase();
         if (telState) telState.textContent = active.taskState;
-        if (telInventory) telInventory.textContent = active.inventory;
+        if (telInventory) {
+            const invSlots = active.inventory && Array.isArray(active.inventory.slots) ? active.inventory.slots : [];
+            telInventory.textContent = invSlots.length > 0 ? `${active.inventory.batchType} (${invSlots.length}/2)` : 'empty';
+        }
         if (telLastScan) telLastScan.textContent = active.lastScanResult;
 
         if (uiUnits) uiUnits.innerHTML = `${controller.bots.length} / 20 <span class="text-[10px]">BOTS</span>`;
@@ -769,15 +970,59 @@ function initBotVisualizer(controller, containerId) {
             `).join('');
         }
 
-        // Render/Update individual bot elements & interactive click shortcuts
+        const activeKeys = new Set();
+        controller.worldObjects.forEach((type, key) => {
+            if (type === 'crate') {
+                activeKeys.add(key);
+                let crateEl = dynamicCargoElements.get(key);
+                if (!crateEl) {
+                    crateEl = document.createElement('div');
+                    crateEl.style.position = 'absolute';
+                    crateEl.style.width = controller.gridSize + 'px';
+                    crateEl.style.height = controller.gridSize + 'px';
+                    crateEl.style.border = '2px solid #412d00';
+                    crateEl.style.zIndex = '40';
+                    crateEl.style.display = 'flex';
+                    crateEl.style.alignItems = 'center';
+                    crateEl.style.justifyContent = 'center';
+                    crateEl.style.cursor = 'pointer';
+                    crateEl.innerHTML = '<span class="material-symbols-outlined text-xs text-on-primary">box</span>';
+                    
+                    crateEl.addEventListener('mouseenter', () => { hoveredCargoKey = key; tooltipEl.style.display = 'block'; });
+                    crateEl.addEventListener('mouseleave', () => { hoveredCargoKey = null; tooltipEl.style.display = 'none'; });
+                    crateEl.addEventListener('mousemove', (e) => {
+                        const rect = container.getBoundingClientRect();
+                        tooltipEl.style.left = (e.clientX - rect.left + 12) + 'px';
+                        tooltipEl.style.top = (e.clientY - rect.top - 28) + 'px';
+                    });
+
+                    container.appendChild(crateEl);
+                    dynamicCargoElements.set(key, crateEl);
+                }
+                const [cx, cy] = key.split(',').map(Number);
+                const meta = controller.crateMetadata.get(key) || CRATE_TYPES.standard;
+                
+                crateEl.style.backgroundColor = meta.color;
+                crateEl.style.left = (cx * controller.gridSize) + 'px';
+                crateEl.style.top = (cy * controller.gridSize) + 'px';
+                crateEl.style.display = 'flex';
+            }
+        });
+
+        dynamicCargoElements.forEach((el, key) => {
+            if (!activeKeys.has(key)) {
+                el.remove();
+                dynamicCargoElements.delete(key);
+            }
+        });
+
         controller.bots.forEach(bot => {
             let el = botElementsMap.get(bot.bot_id);
             if (!el) {
                 el = document.createElement('div');
                 el.style.position = 'absolute';
-                el.style.width = '32px';
-                el.style.height = '32px';
-                el.style.backgroundColor = bot.bot_id === controller.selectedBotId ? '#ffd588' : '#fdbb25';
+                el.style.width = controller.gridSize + 'px';
+                el.style.height = controller.gridSize + 'px';
                 el.style.border = '2px solid #412d00';
                 el.style.zIndex = '50';
                 el.style.display = 'flex';
@@ -786,10 +1031,7 @@ function initBotVisualizer(controller, containerId) {
                 el.style.cursor = 'pointer';
                 el.innerHTML = `<div style="width: 8px; height: 8px; background: #412d00;"></div>`;
                 
-                // --- FEATURE ADDITION: Click to Select Shortcut & Hover Telemetry ---
-                el.addEventListener('click', () => {
-                    controller.selectBot(bot.bot_id);
-                });
+                el.addEventListener('click', () => { controller.selectBot(bot.bot_id); });
                 el.addEventListener('mouseenter', () => { hoveredBotId = bot.bot_id; tooltipEl.style.display = 'block'; });
                 el.addEventListener('mouseleave', () => { hoveredBotId = null; tooltipEl.style.display = 'none'; });
                 el.addEventListener('mousemove', (e) => {
@@ -808,27 +1050,32 @@ function initBotVisualizer(controller, containerId) {
             el.style.top = (bot.y * controller.gridSize) + 'px';
         });
 
-        // Update active hover tooltip info dynamically per frame if hovered
         if (hoveredBotId) {
             const targetBot = controller.bots.find(b => b.bot_id === hoveredBotId);
             if (targetBot) {
                 const facingName = BOT_DIRECTIONS[targetBot.orientationIndex % BOT_DIRECTIONS.length].name.toUpperCase();
+                const invSlots = targetBot.inventory && Array.isArray(targetBot.inventory.slots) ? targetBot.inventory.slots : [];
+                const invStr = invSlots.length > 0 ? `${targetBot.inventory.batchType} (${invSlots.length}/2)` : 'empty';
                 tooltipEl.innerHTML = `
                     <strong>${targetBot.bot_id}</strong><br>
                     POS: (${targetBot.x}, ${targetBot.y})<br>
                     FACING: ${facingName}<br>
                     STATE: <span style="color: ${targetBot.taskState !== 'IDLE' ? '#8cf272' : '#ffd588'}">${targetBot.taskState}</span><br>
-                    INV: ${targetBot.inventory}<br>
+                    INV: ${invStr}<br>
                     SCAN: ${targetBot.lastScanResult}
                 `;
             }
-        }
-
-        const isCratePresent = controller.worldObjects.has('3,5');
-        if (isCratePresent) {
-            crateEl.style.display = 'flex';
-        } else {
-            crateEl.style.display = 'none';
+        } else if (hoveredCargoKey) {
+            const crateMeta = controller.crateMetadata.get(hoveredCargoKey);
+            if (crateMeta) {
+                tooltipEl.innerHTML = `
+                    <strong>CRATE: ${crateMeta.code || 'CARGO'}</strong><br>
+                    CLASS: <span style="color: ${crateMeta.color}">${crateMeta.name}</span><br>
+                    VALUE: ${crateMeta.value} AU<br>
+                    POS: (${crateMeta.x}, ${crateMeta.y})<br>
+                    ZONE: ${crateMeta.zone || 'General'}
+                `;
+            }
         }
 
         requestAnimationFrame(updateVisuals);
@@ -836,7 +1083,7 @@ function initBotVisualizer(controller, containerId) {
     updateVisuals();
 }
 
-window.botController = new BotController({ commandDelayMs: 400 });
+window.botController = new AdvancedBotController({ commandDelayMs: 400 });
 initBotVisualizer(window.botController, 'VIEWPORT_ACTIVE');
 
 function gameLoop() {
